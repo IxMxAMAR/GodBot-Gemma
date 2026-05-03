@@ -8,3 +8,6 @@ sessions/
 .venv/
 .godbot/
 .env
+extensions/vscode/node_modules/
+extensions/vscode/out/
+*.vsix

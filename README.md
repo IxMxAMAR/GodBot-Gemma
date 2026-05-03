@@ -132,3 +132,32 @@ Self-hosted single-owner Discord bot. Surfaces GodBot in any channel or DM.
 - Solo-owner only — other users are silently ignored
 - Embedded mode (`--no-daemon`) serializes ALL channels through one global lock due to a known shared-env-var limitation (see "Known issues" above)
 - Discord rate-limits message edits; the bot throttles streaming to ~750ms / 400-char cadence
+
+## VSCode Extension
+
+Lives at `extensions/vscode/`. Build:
+
+```bash
+cd extensions/vscode
+npm install
+npm run build
+```
+
+Install in VSCode:
+- Easiest path: open this folder in a separate VSCode window, press F5 to run an Extension Development Host
+- Packaged install: `npx vsce package --allow-missing-repository` produces `godbot-vscode-0.1.0.vsix` → `code --install-extension godbot-vscode-0.1.0.vsix`
+
+Settings (set via Settings → Extensions → GodBot):
+- `godbot.baseUrl` — daemon URL
+- `godbot.autoLaunch` — start `godbot-web` if down
+- `godbot.pythonPath` — interpreter to use when auto-launching
+
+The extension talks to the same `godbot-web` daemon as the TUI / Discord bot, so sessions are visible across all three surfaces.
+
+### Known issues (v0.1)
+
+- No session picker widget — `New Session` button works, but switching to an existing daemon session requires a future widget
+- No `vscode-test` integration framework — manual smoke + `tsc --noEmit` + Node SSE-parser test (3 tests via `tsx`) is the v0.1 floor
+- Node tests run via `tsx`: `node --import tsx --test src/__tests__/client.test.ts` (Node's built-in runner doesn't natively understand TypeScript, so `tsx` is loaded as an importer)
+- VSIX packaging needs `--allow-missing-repository` since the `package.json` has no `repository` field
+- The webview button glyphs (⊕ ⏹ ⚙) are inline Unicode in the provider's HTML; if your VSCode build renders them as boxes, switch to text labels in `chatProvider.ts`
