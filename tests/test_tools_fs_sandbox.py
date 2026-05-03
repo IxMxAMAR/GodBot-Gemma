@@ -1,15 +1,17 @@
 import pytest
 from godbot.core.registry import DEFAULT
-from godbot.core.workspace import Workspace, set_workspace
+from godbot.core.workspace import Workspace, _current
 import godbot.tools  # discovery
 
 
 @pytest.fixture
 def workspace_token(tmp_path):
     ws = Workspace.of(str(tmp_path))
-    token = set_workspace(ws)
-    yield ws
-    set_workspace(None)
+    token = _current.set(ws)
+    try:
+        yield ws
+    finally:
+        _current.reset(token)
 
 
 def test_read_file_inside_workspace_works(tmp_path, workspace_token):

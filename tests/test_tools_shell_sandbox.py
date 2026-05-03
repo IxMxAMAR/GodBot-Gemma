@@ -1,16 +1,18 @@
 import sys
 import pytest
 from godbot.core.registry import DEFAULT
-from godbot.core.workspace import Workspace, set_workspace
+from godbot.core.workspace import Workspace, _current
 import godbot.tools
 
 
 @pytest.fixture
 def workspace_token(tmp_path):
     ws = Workspace.of(str(tmp_path))
-    token = set_workspace(ws)
-    yield tmp_path
-    set_workspace(None)
+    token = _current.set(ws)
+    try:
+        yield tmp_path
+    finally:
+        _current.reset(token)
 
 
 def test_run_python_inherits_workspace_cwd(workspace_token):
