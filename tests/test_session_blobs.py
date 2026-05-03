@@ -9,7 +9,10 @@ def test_small_result_inline(tmp_path):
     blob_dir = s.dir / "blobs"
     assert not list(blob_dir.glob("c1.txt"))
     msgs = s.messages_for_llm()
-    assert any(m.get("content") == "small text" for m in msgs if m["role"] == "tool")
+    assert any(
+        m["role"] == "user" and "tool_result(c1)" in m["content"] and "small text" in m["content"]
+        for m in msgs
+    )
 
 
 def test_large_result_spilled(tmp_path):
@@ -22,9 +25,10 @@ def test_large_result_spilled(tmp_path):
     assert blob.exists()
     assert blob.read_text() == big
     msgs = s.messages_for_llm()
-    tool_msg = [m for m in msgs if m["role"] == "tool"][0]
+    tool_msg = [m for m in msgs if m["role"] == "user" and "tool_result(c1)" in m["content"]][0]
     assert "elided" in tool_msg["content"]
-    assert tool_msg["content"].startswith("X" * 100)
+    # Content begins with "tool_result(c1): " prefix, then the truncated body which starts with X*
+    assert "X" * 100 in tool_msg["content"]
 
 
 def test_read_blob(tmp_path):

@@ -16,9 +16,10 @@ def test_append_assistant_and_tool(tmp_path):
     msgs = s.messages_for_llm()
     assert msgs[0]["role"] == "user"
     assert msgs[1]["role"] == "assistant"
-    assert msgs[1]["tool_calls"][0]["function"]["name"] == "echo"
-    assert msgs[1]["tool_calls"][0]["id"] == "c1"
-    assert msgs[2] == {"role": "tool", "tool_call_id": "c1", "content": "x"}
+    assert "echo" in msgs[1]["content"]
+    assert msgs[2]["role"] == "user"
+    assert "tool_result(c1)" in msgs[2]["content"]
+    assert "x" in msgs[2]["content"]
 
 
 def test_append_assistant_final(tmp_path):

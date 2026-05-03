@@ -60,6 +60,13 @@ class Registry:
     def all(self) -> list[ToolSpec]:
         return list(self._tools.values())
 
+    def subset(self, names: Optional[list[str]]) -> list[ToolSpec]:
+        """Return ToolSpecs for the listed names, or all tools if names is None."""
+        if names is None:
+            return self.all()
+        wanted = set(names)
+        return [t for t in self._tools.values() if t.name in wanted]
+
     def is_dangerous(self, name: str) -> bool:
         s = self._tools.get(name)
         return bool(s and s.dangerous)

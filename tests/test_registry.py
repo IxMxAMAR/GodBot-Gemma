@@ -128,3 +128,35 @@ def test_execute_coerces_return_to_string():
     out = reg.execute("listy", {"n": 3})
     assert isinstance(out, str)
     assert "0" in out and "2" in out
+
+
+def test_subset_none_returns_all():
+    reg = Registry()
+
+    @reg.tool()
+    def a() -> str:
+        """a."""
+        return ""
+
+    @reg.tool()
+    def b() -> str:
+        """b."""
+        return ""
+
+    assert {t.name for t in reg.subset(None)} == {"a", "b"}
+
+
+def test_subset_filters():
+    reg = Registry()
+
+    @reg.tool()
+    def a() -> str:
+        """a."""
+        return ""
+
+    @reg.tool()
+    def b() -> str:
+        """b."""
+        return ""
+
+    assert {t.name for t in reg.subset(["a"])} == {"a"}

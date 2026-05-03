@@ -182,20 +182,11 @@ class Session:
             elif t == "assistant_final":
                 out.append({"role": "assistant", "content": ev["content"]})
             elif t == "assistant_tool_call":
-                out.append({
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{
-                        "id": ev["call_id"],
-                        "type": "function",
-                        "function": {
-                            "name": ev["name"],
-                            "arguments": json.dumps(ev["args"]),
-                        },
-                    }],
-                })
+                # Send the model's own ReAct JSON back as the assistant turn so it sees what it last decided.
+                out.append({"role": "assistant", "content": ev["raw"]})
             elif t == "tool_result":
-                out.append({"role": "tool", "tool_call_id": ev["call_id"], "content": ev["content"]})
+                # Synthesized as a user-role 'tool_result(call_id): ...' message — matches §4.8 system prompt contract.
+                out.append({"role": "user", "content": f"tool_result({ev['call_id']}): {ev['content']}"})
             elif t == "synthetic_tool_result":
                 out.append({"role": "user", "content": f"<system>{ev['content']}</system>"})
         return out
