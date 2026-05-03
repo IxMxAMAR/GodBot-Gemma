@@ -1,7 +1,6 @@
 from __future__ import annotations
 import argparse
 import asyncio
-import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -92,22 +91,10 @@ class TuiApp(App):
         await self._populate_sidebar()
 
     async def _populate_sidebar(self) -> None:
-        # Daemon mode: pull from Client; embedded: pull from local registry/RAG dir.
         try:
-            if self._session.mode == "daemon":
-                client = self._session._client  # internal access -- small cost for v0.1
-                tools = await client.list_tools()
-                sessions = await client.list_sessions()
-                colls = await client.list_rag_collections()
-            else:
-                from godbot.core.registry import DEFAULT
-                tools = [
-                    {"name": t.name, "description": t.description, "dangerous": t.dangerous}
-                    for t in DEFAULT.all()
-                ]
-                sessions = []
-                rag_root = Path(os.environ.get("GODBOT_HOME", str(Path.home() / ".godbot"))) / "rag"
-                colls = sorted([d.name for d in rag_root.iterdir() if d.is_dir()]) if rag_root.exists() else []
+            tools = await self._session.list_tools()
+            sessions = await self._session.list_sessions()
+            colls = await self._session.list_rag_collections()
             self.sidebar.populate_sessions(sessions)
             self.sidebar.populate_tools(tools)
             self.sidebar.populate_rag(colls, current=None)
@@ -145,16 +132,20 @@ class TuiApp(App):
         await self._switch_session(sid=msg.sid)
 
     async def on_tool_toggled(self, msg: ToolToggled) -> None:
-        if self._session is None or self._session.mode != "daemon":
+        if self._session is None:
             return
-        client = self._session._client
-        await client.toggle_tool(self._session.sid, msg.name, msg.enabled)
+        try:
+            await self._session.toggle_tool(msg.name, msg.enabled)
+        except Exception:
+            pass
 
     async def on_rag_collection_chosen(self, msg: RagCollectionChosen) -> None:
-        if self._session is None or self._session.mode != "daemon":
+        if self._session is None:
             return
-        client = self._session._client
-        await client.use_rag_collection(self._session.sid, msg.collection)
+        try:
+            await self._session.use_rag_collection(msg.collection)
+        except Exception:
+            pass
 
     async def _switch_session(self, sid: Optional[str]) -> None:
         if self._stream_task and not self._stream_task.done():

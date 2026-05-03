@@ -137,6 +137,58 @@ class Session:
         else:
             raise RuntimeError("Session not connected")
 
+    async def list_tools(self) -> list[dict]:
+        """Get the list of available tools.
+
+        Daemon mode: GET /api/tools.
+        Embedded mode: read from the local DEFAULT registry.
+        """
+        if self._mode == "daemon":
+            return await self._client.list_tools()
+        elif self._mode == "embedded":
+            from godbot.core.registry import DEFAULT
+            return [
+                {"name": t.name, "description": t.description, "dangerous": t.dangerous}
+                for t in DEFAULT.all()
+            ]
+        raise RuntimeError("Session not connected")
+
+    async def list_sessions(self) -> list[dict]:
+        """List existing sessions.
+
+        Daemon mode: GET /api/sessions.
+        Embedded mode: walk the local sessions root.
+        """
+        if self._mode == "daemon":
+            return await self._client.list_sessions()
+        elif self._mode == "embedded":
+            from pathlib import Path as _P
+            root = self._runner._core_session.dir.parent
+            out = []
+            for d in sorted(_P(root).iterdir()):
+                if d.is_dir():
+                    out.append({"id": d.name, "model": ""})
+            return out
+        raise RuntimeError("Session not connected")
+
+    async def list_rag_collections(self) -> list[str]:
+        """List available RAG collections.
+
+        Daemon mode: GET /api/rag/collections.
+        Embedded mode: walk ~/.godbot/rag/ for subdirs.
+        """
+        if self._mode == "daemon":
+            return await self._client.list_rag_collections()
+        elif self._mode == "embedded":
+            import os as _os
+            from pathlib import Path as _P
+            home = _P(_os.environ.get("GODBOT_HOME", str(_P.home() / ".godbot")))
+            rag_root = home / "rag"
+            if not rag_root.exists():
+                return []
+            return sorted([d.name for d in rag_root.iterdir() if d.is_dir()])
+        raise RuntimeError("Session not connected")
+
     async def close(self) -> None:
         if self._client is not None:
             await self._client.__aexit__(None, None, None)
