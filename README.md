@@ -68,6 +68,21 @@ async with Session(embedded_factory=factory) as s:
         print(ev)
 ```
 
+## TUI
+
+A full-screen terminal app:
+
+```bash
+godbot-tui                       # daemon-preferred (auto-launch if not running)
+godbot-tui --no-daemon           # embedded only
+godbot-tui --resume <session-id> # resume a session
+godbot-tui --base-url http://127.0.0.1:7878
+```
+
+Three-pane layout: sessions/tools/RAG sidebar on the left, conversation in the middle, message input on the bottom. `Ctrl+C` stops the running turn (NOT quit); `Ctrl+Q` quits. `Ctrl+N` starts a new session.
+
+Dangerous tool calls (write_file, run_powershell, etc.) display a gate card with Allow / Always / Deny buttons inline in the conversation.
+
 ## Known issues / follow-ups
 
 Discovered during implementation; track for the next pass:
