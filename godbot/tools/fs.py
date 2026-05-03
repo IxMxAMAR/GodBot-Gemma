@@ -76,3 +76,28 @@ def grep(pattern: str, root: str = ".", glob_filter: str = "*") -> str:
                     out.append("... [truncated at 500 matches]")
                     return "\n".join(out)
     return "\n".join(out) if out else "(no matches)"
+
+
+@tool(dangerous=True)
+def write_file(path: str, content: str) -> str:
+    """Write UTF-8 content to a file (creates parent dirs)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return f"ok: wrote {len(content)} chars to {p}"
+
+
+@tool(dangerous=True)
+def edit_file(path: str, old: str, new: str) -> str:
+    """Replace one unique occurrence of `old` with `new` in a file."""
+    p = Path(path)
+    if not p.exists():
+        return f"[error] file not found: {path}"
+    text = p.read_text(encoding="utf-8")
+    occurrences = text.count(old)
+    if occurrences == 0:
+        return f"[error] old string not found in {path}"
+    if occurrences > 1:
+        return f"[error] old string not unique ({occurrences} matches) in {path}"
+    p.write_text(text.replace(old, new, 1), encoding="utf-8")
+    return f"ok: edited {p}"
