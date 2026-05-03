@@ -131,6 +131,50 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
             ev.set()
         return {"stopped": True}
 
+    @app.get("/api/tools")
+    async def tools_list():
+        return [
+            {"name": t.name, "description": t.description, "dangerous": t.dangerous}
+            for t in DEFAULT.all()
+        ]
+
+    @app.post("/api/tools/toggle")
+    async def tool_toggle(request: Request):
+        body = await request.json()
+        sid = body["session_id"]
+        name = body["name"]
+        enabled = bool(body["enabled"])
+        try:
+            session = _sessions_cache.get(sid) or Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        _sessions_cache[sid] = session
+        current = list(session.tool_overrides or [t.name for t in DEFAULT.all()])
+        if enabled and name not in current:
+            current.append(name)
+        elif not enabled and name in current:
+            current.remove(name)
+        session.set_tool_overrides(sorted(current))
+        return {"ok": True, "tool_overrides": session.tool_overrides}
+
+    @app.get("/api/rag/collections")
+    async def rag_collections():
+        # Filled in Phase 10. For now return empty list.
+        return []
+
+    @app.post("/api/rag/use")
+    async def rag_use(request: Request):
+        body = await request.json()
+        sid = body["session_id"]
+        coll = body.get("collection")
+        try:
+            session = _sessions_cache.get(sid) or Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        _sessions_cache[sid] = session
+        session.set_rag_collection(coll)
+        return {"ok": True}
+
 
 def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
     sessions_root = Path(sessions_root or (Path.cwd() / "sessions"))
@@ -177,6 +221,8 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             "messages": s.messages_for_llm(max_context=0),
             "yolo": s.yolo,
             "auto_approved_tools": list(s._meta.get("auto_approved_tools", [])),
+            "tool_overrides": s.tool_overrides,
+            "rag_collection": s.rag_collection,
         }
 
     _register_endpoints(app, sessions_root)
