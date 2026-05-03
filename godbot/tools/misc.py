@@ -64,6 +64,13 @@ def set_clipboard(text: str) -> str:
 @tool(dangerous=True)
 def take_screenshot(path: str) -> str:
     """Capture the primary monitor and save to PNG path."""
+    from godbot.core.workspace import current_workspace, WorkspaceEscape
+    ws = current_workspace()
+    if ws is not None:
+        try:
+            path = str(ws.confine(path))
+        except WorkspaceEscape as e:
+            return f"[error] sandbox: {e}"
     try:
         import mss
         with mss.mss() as sct:

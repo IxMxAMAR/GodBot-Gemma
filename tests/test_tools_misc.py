@@ -35,3 +35,14 @@ def test_take_screenshot_is_dangerous():
     spec = DEFAULT.spec("take_screenshot")
     assert spec is not None
     assert spec.dangerous is True
+
+
+def test_take_screenshot_refuses_outside_workspace(tmp_path):
+    from godbot.core.workspace import Workspace, set_workspace, _current
+    ws = Workspace.of(str(tmp_path))
+    token = _current.set(ws)
+    try:
+        out = DEFAULT.execute("take_screenshot", {"path": "../escape.png"})
+        assert "[error] sandbox" in out
+    finally:
+        _current.reset(token)
