@@ -24,6 +24,7 @@ dependencies = [
     "mss>=9.0",
     "pyperclip>=1.8",
     "Pillow>=10.0",
+    "textual>=0.80",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,7 @@ dev = [
 [project.scripts]
 godbot-web = "godbot.interfaces.web:main"
 godbot-cli = "godbot.interfaces.cli:main"
+godbot-tui = "godbot.interfaces.tui:main"
 godbot-index = "godbot.index:main"
 
 [tool.setuptools.packages.find]
