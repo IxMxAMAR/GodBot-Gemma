@@ -193,12 +193,15 @@ async def run_repl(*, model: str = "auto", resume: Optional[str] = None, yolo: b
                 decision = await _gate_prompt()
                 session.resolve_gate(ev.id, decision)
 
-        await run_turn(
-            llm=llm, session=session, registry=DEFAULT, emit=emit,
-            cancel=cancel, max_steps=cfg.agent.max_steps,
-            max_context=cfg.llm.max_context, system_prompt="",
-            system_prompt_builder=build_system_prompt,
-        )
+        try:
+            await run_turn(
+                llm=llm, session=session, registry=DEFAULT, emit=emit,
+                cancel=cancel, max_steps=cfg.agent.max_steps,
+                max_context=cfg.llm.max_context, system_prompt="",
+                system_prompt_builder=build_system_prompt,
+            )
+        except Exception as e:
+            renderer.console.print(f"[red]error: {type(e).__name__}: {e}[/]")
 
 
 def main() -> int:
