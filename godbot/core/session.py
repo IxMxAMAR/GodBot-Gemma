@@ -121,3 +121,78 @@ class Session:
         tmp = sdir / "meta.json.tmp"
         tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
         os.replace(tmp, path)
+
+    def _append_event(self, event: dict[str, Any]) -> None:
+        path = self.dir / "events.jsonl"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+
+    def append_user(self, content: str) -> None:
+        self._append_event({"type": "user", "content": content})
+
+    def append_assistant_final(self, content: str) -> None:
+        self._append_event({"type": "assistant_final", "content": content})
+
+    def append_assistant_tool_call(self, call_id: str, name: str, args: dict[str, Any], raw: str) -> None:
+        self._append_event({
+            "type": "assistant_tool_call",
+            "call_id": call_id, "name": name, "args": args, "raw": raw,
+        })
+
+    def append_tool_result(self, call_id: str, content: str, blob: Optional[str] = None) -> None:
+        self._append_event({"type": "tool_result", "call_id": call_id, "content": content, "blob": blob})
+
+    def append_synthetic_tool_result(self, content: str) -> None:
+        self._append_event({"type": "synthetic_tool_result", "content": content})
+
+    def append_meta_event(self, kind: str, payload: dict[str, Any]) -> None:
+        self._append_event({"type": kind, **payload})
+
+    def _events(self) -> Iterable[dict[str, Any]]:
+        path = self.dir / "events.jsonl"
+        if not path.exists():
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+    def messages_for_llm(self) -> list[dict[str, Any]]:
+        return self._build_messages()
+
+    def _build_messages(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for ev in self._events():
+            t = ev["type"]
+            if t == "user":
+                out.append({"role": "user", "content": ev["content"]})
+            elif t == "assistant_final":
+                out.append({"role": "assistant", "content": ev["content"]})
+            elif t == "assistant_tool_call":
+                out.append({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": ev["call_id"],
+                        "type": "function",
+                        "function": {
+                            "name": ev["name"],
+                            "arguments": json.dumps(ev["args"]),
+                        },
+                    }],
+                })
+            elif t == "tool_result":
+                out.append({"role": "tool", "tool_call_id": ev["call_id"], "content": ev["content"]})
+            elif t == "synthetic_tool_result":
+                out.append({"role": "user", "content": f"<system>{ev['content']}</system>"})
+        return out
