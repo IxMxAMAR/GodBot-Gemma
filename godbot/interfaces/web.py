@@ -16,6 +16,7 @@ from godbot.core.llm import LLMClient
 from godbot.core.registry import DEFAULT
 from godbot.core.session import Session
 from godbot.prompts import build_system_prompt
+import godbot.tools  # noqa: F401 — triggers @tool auto-discovery so /api/tools is populated
 
 
 # Shared per-process state.
