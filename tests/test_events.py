@@ -37,7 +37,7 @@ def test_gate_event_serializes():
 
 def test_error_event_serializes():
     e = ErrorEvent(message="oops", recoverable=True)
-    assert event_to_dict(e) == {"type": "error", "message": "oops", "recoverable": True}
+    assert event_to_dict(e) == {"type": "agent_error", "message": "oops", "recoverable": True}
 
 
 def test_done_event_serializes():

@@ -50,7 +50,10 @@ _TYPE_NAMES = {
     ToolCallEvent: "tool_call",
     ToolResultEvent: "tool_result",
     GateEvent: "gate",
-    ErrorEvent: "error",
+    # Renamed from "error" to avoid colliding with the EventSource builtin
+    # `error` event (fired on connection drop with no `data` payload, which
+    # would crash a JSON.parse-based handler on the frontend).
+    ErrorEvent: "agent_error",
     DoneEvent: "done",
 }
 

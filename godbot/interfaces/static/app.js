@@ -106,7 +106,10 @@ function openStream() {
   es.addEventListener('tool_call', (e) => appendToolCall(JSON.parse(e.data)));
   es.addEventListener('tool_result', (e) => appendToolResult(JSON.parse(e.data)));
   es.addEventListener('gate', (e) => appendGate(JSON.parse(e.data)));
-  es.addEventListener('error', (e) => appendError(JSON.parse(e.data)));
+  // Use 'agent_error' (custom SSE event) — NOT 'error', which is the builtin
+  // EventSource connection-drop event with no `data` field. JSON.parse(undefined)
+  // would throw on every reconnect.
+  es.addEventListener('agent_error', (e) => appendError(JSON.parse(e.data)));
   es.addEventListener('done', () => { state.currentAssistantBuf = null; });
   es.addEventListener('ping', () => {});
   state.es = es;
