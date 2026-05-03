@@ -28,3 +28,10 @@ def test_calculator_rejects_name_reference():
     # Bare names (e.g. variables) must also be rejected.
     out = DEFAULT.execute("calculator", {"expr": "x + 1"})
     assert "[error]" in out
+
+
+def test_take_screenshot_is_dangerous():
+    # Writes a PNG to an arbitrary filesystem path — must be gated like write_file.
+    spec = DEFAULT.spec("take_screenshot")
+    assert spec is not None
+    assert spec.dangerous is True

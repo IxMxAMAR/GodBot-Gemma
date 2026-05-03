@@ -61,7 +61,7 @@ def set_clipboard(text: str) -> str:
         return f"[error] {e}"
 
 
-@tool()
+@tool(dangerous=True)
 def take_screenshot(path: str) -> str:
     """Capture the primary monitor and save to PNG path."""
     try:
