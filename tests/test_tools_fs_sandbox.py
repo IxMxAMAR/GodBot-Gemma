@@ -73,3 +73,32 @@ def test_no_workspace_means_no_confinement(tmp_path):
     target.write_text("hello")
     out = DEFAULT.execute("read_file", {"path": str(target)})
     assert "hello" in out
+
+
+def test_hardlink_escape_refused_on_write(tmp_path, workspace_token):
+    import os
+    outside = tmp_path.parent / "outside_secret.txt"
+    outside.write_text("SECRET")
+    inside = tmp_path / "innocent.txt"
+    try:
+        os.link(str(outside), str(inside))
+    except (OSError, NotImplementedError, AttributeError):
+        pytest.skip("hardlinks unavailable on this filesystem")
+    out = DEFAULT.execute("write_file", {"path": "innocent.txt", "content": "OVERWRITTEN"})
+    assert "[error] sandbox" in out
+    assert "multi-link" in out or "nlink" in out
+    assert outside.read_text() == "SECRET"  # outside untouched
+
+
+def test_hardlink_escape_refused_on_read(tmp_path, workspace_token):
+    import os
+    outside = tmp_path.parent / "outside_secret_read.txt"
+    outside.write_text("SECRET_CONTENT")
+    inside = tmp_path / "innocent_read.txt"
+    try:
+        os.link(str(outside), str(inside))
+    except (OSError, NotImplementedError, AttributeError):
+        pytest.skip("hardlinks unavailable")
+    out = DEFAULT.execute("read_file", {"path": "innocent_read.txt"})
+    assert "[error] sandbox" in out
+    assert "SECRET_CONTENT" not in out

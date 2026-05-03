@@ -8,8 +8,12 @@ from godbot.core.registry import tool
 from godbot.core.workspace import current_workspace, WorkspaceEscape
 
 
-def _confine_or_error(path: str) -> tuple[str, str | None]:
-    """Apply workspace confinement. Returns (resolved_path, error_message).
+def _confine_or_error(path: str, *, check_links: bool = True) -> tuple[str, str | None]:
+    """Apply workspace confinement.
+
+    Returns (resolved_path, error_message). When check_links=True and the path
+    points to an existing multi-link file, refuse — hardlinks can target outside
+    the workspace and bypass confinement.
 
     On success: (resolved_path, None).
     On escape: ("", error_string).
@@ -19,15 +23,28 @@ def _confine_or_error(path: str) -> tuple[str, str | None]:
     if ws is None:
         return path, None
     try:
-        return str(ws.confine(path)), None
+        resolved = ws.confine(path)
     except WorkspaceEscape as e:
         return "", f"[error] sandbox: {e}"
+    if check_links:
+        try:
+            st = os.stat(resolved)
+            if st.st_nlink > 1:
+                return "", (
+                    f"[error] sandbox: refusing op on multi-link file "
+                    f"{resolved} (nlink={st.st_nlink}); hard links can target outside the workspace"
+                )
+        except FileNotFoundError:
+            pass  # creating a new file is fine
+        except OSError:
+            pass  # symlink resolution issues already caught by confine
+    return str(resolved), None
 
 
 @tool()
 def read_file(path: str, max_lines: int = 2000, start_line: int = 1) -> str:
     """Read a UTF-8 text file. Returns numbered lines starting from start_line."""
-    path, err = _confine_or_error(path)
+    path, err = _confine_or_error(path, check_links=True)
     if err:
         return err
     p = Path(path)
@@ -49,7 +66,7 @@ def read_file(path: str, max_lines: int = 2000, start_line: int = 1) -> str:
 @tool()
 def list_dir(path: str = ".") -> str:
     """List the contents of a directory. Suffixes directories with '/'."""
-    path, err = _confine_or_error(path)
+    path, err = _confine_or_error(path, check_links=False)
     if err:
         return err
     p = Path(path)
@@ -66,7 +83,7 @@ def list_dir(path: str = ".") -> str:
 @tool()
 def glob(pattern: str, root: str = ".") -> str:
     """Recursively match files against a glob pattern, e.g. '**/*.py'."""
-    root, err = _confine_or_error(root)
+    root, err = _confine_or_error(root, check_links=False)
     if err:
         return err
     p = Path(root)
@@ -83,7 +100,7 @@ def grep(pattern: str, root: str = ".", glob_filter: str = "*") -> str:
         rx = re.compile(pattern)
     except re.error as e:
         return f"[error] bad regex: {e}"
-    root, err = _confine_or_error(root)
+    root, err = _confine_or_error(root, check_links=False)
     if err:
         return err
     p = Path(root)
@@ -110,7 +127,7 @@ def grep(pattern: str, root: str = ".", glob_filter: str = "*") -> str:
 @tool(dangerous=True)
 def write_file(path: str, content: str) -> str:
     """Write UTF-8 content to a file (creates parent dirs)."""
-    path, err = _confine_or_error(path)
+    path, err = _confine_or_error(path, check_links=True)
     if err:
         return err
     p = Path(path)
@@ -122,7 +139,7 @@ def write_file(path: str, content: str) -> str:
 @tool(dangerous=True)
 def edit_file(path: str, old: str, new: str) -> str:
     """Replace one unique occurrence of `old` with `new` in a file."""
-    path, err = _confine_or_error(path)
+    path, err = _confine_or_error(path, check_links=True)
     if err:
         return err
     p = Path(path)
