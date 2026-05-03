@@ -1,16 +1,25 @@
 from __future__ import annotations
+import os
 import shutil
 import subprocess
 import sys
 
 from godbot.core.registry import tool
+from godbot.core.workspace import current_workspace
 
 
 def _run(argv: list[str], input_text: str = "", timeout: int = 60, cwd: str | None = None) -> str:
+    ws = current_workspace()
+    if ws is not None and cwd is None:
+        cwd = str(ws.root)
+    env = os.environ.copy()
+    if ws is not None:
+        env["WORKSPACE_ROOT"] = str(ws.root)
     try:
         proc = subprocess.run(
             argv, input=input_text, capture_output=True, text=True,
-            timeout=timeout, cwd=cwd, encoding="utf-8", errors="replace",
+            timeout=timeout, cwd=cwd, env=env,
+            encoding="utf-8", errors="replace",
         )
     except subprocess.TimeoutExpired:
         return f"[error] timeout after {timeout}s"
