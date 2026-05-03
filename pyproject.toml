@@ -35,12 +35,16 @@ dev = [
     "respx>=0.21",
     "jsonschema>=4.0",
 ]
+discord = [
+    "discord.py>=2.4",
+]
 
 [project.scripts]
 godbot-web = "godbot.interfaces.web:main"
 godbot-cli = "godbot.interfaces.cli:main"
 godbot-tui = "godbot.interfaces.tui:main"
 godbot-index = "godbot.index:main"
+godbot-discord = "godbot.interfaces.discord_bot.bot:main"
 
 [tool.setuptools.packages.find]
 include = ["godbot*"]
