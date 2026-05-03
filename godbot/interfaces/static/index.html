@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GodBot</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <span id="brand">GodBot</span>
+    <span id="model">model: <span data-bind="model">…</span></span>
+    <span id="session">session: <span data-bind="session">…</span></span>
+    <span id="rag">rag: <span data-bind="rag">none</span></span>
+  </header>
+  <aside id="sidebar">
+    <section><h3>Sessions</h3><ul id="session-list"></ul><button id="new-session">+ New</button></section>
+    <section><h3>Tools</h3><ul id="tool-list"></ul></section>
+    <section><h3>RAG</h3><select id="rag-pick"></select></section>
+    <button id="stop">Stop</button>
+  </aside>
+  <main id="conversation"></main>
+  <footer id="composer">
+    <textarea id="input" placeholder="type message — Enter to send, Shift+Enter for newline"></textarea>
+    <button id="send">Send</button>
+  </footer>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
