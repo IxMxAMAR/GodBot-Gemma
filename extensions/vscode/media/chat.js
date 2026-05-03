@@ -27,19 +27,34 @@ function appendUser(text) {
   currentAssistant = null;
 }
 
-function appendToken(text) {
+let _tokenQueue = [];
+let _rafScheduled = false;
+
+function _flushTokens() {
+  _rafScheduled = false;
+  if (_tokenQueue.length === 0) return;
   if (!currentAssistant) {
     currentAssistant = document.createElement('div');
     currentAssistant.className = 'msg-assistant';
     $('#conversation').appendChild(currentAssistant);
   }
-  currentAssistant.textContent += text;
+  currentAssistant.textContent += _tokenQueue.join('');
+  _tokenQueue = [];
   scrollBottom();
 }
 
+function appendToken(text) {
+  _tokenQueue.push(text);
+  if (!_rafScheduled) {
+    _rafScheduled = true;
+    requestAnimationFrame(_flushTokens);
+  }
+}
+
 function finalizeAssistant() {
+  // Flush any pending tokens immediately so the JSON parse sees the full text.
+  if (_tokenQueue.length > 0) _flushTokens();
   if (!currentAssistant) return;
-  // Try to parse as ReAct JSON; if final_answer present, replace.
   try {
     const parsed = JSON.parse(currentAssistant.textContent);
     if (parsed && typeof parsed === 'object' && typeof parsed.final_answer === 'string') {
