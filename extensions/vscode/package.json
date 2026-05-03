@@ -1,0 +1,76 @@
+{
+  "name": "godbot-vscode",
+  "displayName": "GodBot",
+  "description": "Local agent harness — chat with GodBot inside VSCode",
+  "version": "0.1.0",
+  "publisher": "ixmxamar",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["AI", "Chat"],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "godbot", "title": "GodBot", "icon": "media/icon.svg" }
+      ]
+    },
+    "views": {
+      "godbot": [
+        { "type": "webview", "id": "godbot.chatView", "name": "Chat" }
+      ]
+    },
+    "commands": [
+      { "command": "godbot.askSelection", "title": "GodBot: Ask about selection" },
+      { "command": "godbot.newSession", "title": "GodBot: New session" },
+      { "command": "godbot.openChat", "title": "GodBot: Open chat" }
+    ],
+    "keybindings": [
+      { "command": "godbot.askSelection", "key": "ctrl+alt+g", "when": "editorTextFocus" },
+      { "command": "godbot.newSession", "key": "ctrl+alt+n" }
+    ],
+    "configuration": {
+      "title": "GodBot",
+      "properties": {
+        "godbot.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:7878",
+          "description": "GodBot daemon base URL"
+        },
+        "godbot.autoLaunch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-launch godbot-web if the daemon is not running"
+        },
+        "godbot.sessionsRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Sessions directory passed to the auto-launched daemon (empty = workspace folder)"
+        },
+        "godbot.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python interpreter for auto-launching the daemon (empty = 'python' on PATH)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "test": "node --import tsx --test src/__tests__/*.test.ts",
+    "vscode:prepublish": "npm run build",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.21.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "@vscode/vsce": "^2.27.0"
+  },
+  "dependencies": {
+    "undici": "^6.19.0"
+  }
+}
