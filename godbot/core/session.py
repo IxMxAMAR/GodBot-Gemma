@@ -60,11 +60,19 @@ class Session:
         return self._meta.get("rag_collection")
 
     @classmethod
-    def create(cls, root: Path, model: str, rag_collection: Optional[str] = None) -> "Session":
+    def create(
+        cls, root: Path, model: str,
+        rag_collection: Optional[str] = None,
+        workspace_root: Optional[str] = None,
+        auto_approve_in_sandbox: bool = False,
+    ) -> "Session":
         sid = _now_id()
         sdir = Path(root) / sid
         sdir.mkdir(parents=True, exist_ok=True)
         (sdir / "blobs").mkdir(exist_ok=True)
+        ws_root_resolved = None
+        if workspace_root:
+            ws_root_resolved = str(Path(workspace_root).resolve())
         meta = {
             "id": sid,
             "started_at": datetime.now().isoformat(timespec="seconds"),
@@ -74,10 +82,34 @@ class Session:
             "auto_approved_tools": [],
             "yolo": False,
             "rag_collection": rag_collection,
+            "workspace_root": ws_root_resolved,
+            "auto_approve_in_sandbox": bool(auto_approve_in_sandbox),
         }
         cls._write_meta(sdir, meta)
         (sdir / "events.jsonl").touch()
         return cls(Path(root), sid, meta)
+
+    @property
+    def workspace(self):
+        from godbot.core.workspace import Workspace
+        root = self._meta.get("workspace_root")
+        if not root:
+            return None
+        try:
+            return Workspace.of(
+                root,
+                auto_approve=bool(self._meta.get("auto_approve_in_sandbox", False)),
+            )
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+
+    def set_workspace(self, root: Optional[str], auto_approve: bool = False) -> None:
+        if root:
+            self._meta["workspace_root"] = str(Path(root).resolve())
+        else:
+            self._meta["workspace_root"] = None
+        self._meta["auto_approve_in_sandbox"] = bool(auto_approve)
+        self._save_meta()
 
     @classmethod
     def load(cls, root: Path, session_id: str) -> "Session":
