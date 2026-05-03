@@ -48,3 +48,19 @@ def test_unknown_keys_in_toml_tolerated(tmp_godbot_home):
     )
     cfg = load_config()  # must not raise
     assert cfg.llm.model == "x"
+
+
+def test_discord_config_defaults(tmp_godbot_home):
+    cfg = load_config()
+    assert cfg.discord.token == ""
+    assert cfg.discord.owner_id == 0
+
+
+def test_discord_config_overrides(tmp_godbot_home):
+    tmp_godbot_home.mkdir(parents=True, exist_ok=True)
+    (tmp_godbot_home / "config.toml").write_text(
+        '[discord]\ntoken = "abc"\nowner_id = 12345\n'
+    )
+    cfg = load_config()
+    assert cfg.discord.token == "abc"
+    assert cfg.discord.owner_id == 12345

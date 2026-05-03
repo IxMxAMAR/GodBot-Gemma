@@ -47,12 +47,19 @@ class UIConfig:
 
 
 @dataclass
+class DiscordConfig:
+    token: str = ""
+    owner_id: int = 0
+
+
+@dataclass
 class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     rag: RAGConfig = field(default_factory=RAGConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+    discord: DiscordConfig = field(default_factory=DiscordConfig)
 
 
 def godbot_home() -> Path:
@@ -82,6 +89,9 @@ def default_config_text() -> str:
         "\n[ui]\n"
         "web_port = 7878\n"
         'theme = "dark"\n'
+        "\n[discord]\n"
+        'token = ""\n'
+        "owner_id = 0\n"
     )
 
 
@@ -104,4 +114,5 @@ def load_config() -> Config:
         tools=ToolsConfig(**_filter_known(raw.get("tools") or {}, ToolsConfig)),
         rag=RAGConfig(**_filter_known(raw.get("rag") or {}, RAGConfig)),
         ui=UIConfig(**_filter_known(raw.get("ui") or {}, UIConfig)),
+        discord=DiscordConfig(**_filter_known(raw.get("discord") or {}, DiscordConfig)),
     )
