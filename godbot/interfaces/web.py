@@ -159,8 +159,11 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
 
     @app.get("/api/rag/collections")
     async def rag_collections():
-        # Filled in Phase 10. For now return empty list.
-        return []
+        home = Path(os.environ.get("GODBOT_HOME", str(Path.home() / ".godbot")))
+        rag_root = home / "rag"
+        if not rag_root.exists():
+            return []
+        return [d.name for d in rag_root.iterdir() if d.is_dir()]
 
     @app.post("/api/rag/use")
     async def rag_use(request: Request):
