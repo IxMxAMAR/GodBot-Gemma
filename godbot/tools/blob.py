@@ -10,6 +10,9 @@ def read_blob(call_id: str, start: int = 0, lines: int = 200) -> str:
 
     Reads `sessions/<id>/blobs/<call_id>.txt`. Active session dir is in
     GODBOT_ACTIVE_SESSION env var (set by the runtime).
+
+    Workspace-safe by construction: blob path is derived from
+    GODBOT_ACTIVE_SESSION env (set by runtime, not the model).
     """
     sdir = os.environ.get("GODBOT_ACTIVE_SESSION")
     if not sdir:
