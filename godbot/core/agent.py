@@ -90,4 +90,42 @@ async def _handle_action(
     emit: EmitFn,
     cancel: asyncio.Event,
 ) -> None:
-    raise NotImplementedError  # filled in 6.2
+    name = parsed["action"]
+    args = parsed.get("args") or {}
+    call_id = _new_call_id()
+
+    session.append_assistant_tool_call(call_id, name, args, raw=json.dumps(parsed))
+    await emit(ToolCallEvent(id=call_id, name=name, args=args))
+
+    err = registry.validate_args(name, args)
+    if err is not None:
+        msg = f"args invalid: {err}"
+        session.append_tool_result(call_id, msg)
+        await emit(ToolResultEvent(id=call_id, preview=msg, blob=None, duration_ms=0))
+        return
+
+    if registry.is_dangerous(name) and not session.is_auto_approved(name) and not session.yolo:
+        decision = await session.await_gate(call_id, name, args, emit, timeout=300)
+        if decision == "deny":
+            msg = "User denied this tool call."
+            session.append_tool_result(call_id, msg)
+            await emit(ToolResultEvent(id=call_id, preview=msg, blob=None, duration_ms=0))
+            return
+        if decision == "always":
+            session.mark_auto_approved(name)
+
+    started = time.time()
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(registry.execute, name, args),
+            timeout=registry.timeout_for(name),
+        )
+    except asyncio.TimeoutError:
+        result = f"tool {name!r} timed out after {registry.timeout_for(name)}s"
+    except Exception as e:
+        result = f"tool {name!r} raised {type(e).__name__}: {e}"
+    duration_ms = int((time.time() - started) * 1000)
+
+    llm_view = session.record_tool_result(call_id, str(result))
+    blob = call_id if len(str(result)) > 8 * 1024 else None
+    await emit(ToolResultEvent(id=call_id, preview=llm_view[:400], blob=blob, duration_ms=duration_ms))
