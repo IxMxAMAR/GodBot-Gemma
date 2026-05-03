@@ -127,21 +127,27 @@ async def _handle_action(
         await emit(ToolResultEvent(id=call_id, preview=msg, blob=None, duration_ms=0))
         return
 
-    # Workspace auto-approval: skip the gate if the sandbox is active AND the
-    # tool is in the FS-safe set. Shell tools stay gated even in sandbox mode.
+    # Workspace auto-approval and gate logic.
     ws = session.workspace
-    sandbox_auto_approve = (
-        ws is not None
-        and ws.auto_approve_in_sandbox
-        and registry.is_dangerous(name)
-        and name in SANDBOX_SAFE_DANGEROUS_TOOLS
-    )
-
-    if (
+    if ws is not None and ws.auto_approve_in_sandbox:
+        # In sandbox YOLO mode, FS-safe dangerous tools auto-approve;
+        # all other dangerous tools STILL gate (regardless of any prior
+        # session-level "always" approval, which we deliberately ignore here
+        # because the sandbox is a stronger guarantee than the per-session flag).
+        if registry.is_dangerous(name) and name not in SANDBOX_SAFE_DANGEROUS_TOOLS:
+            decision = await session.await_gate(call_id, name, args, emit, timeout=300)
+            if decision == "deny":
+                msg = "User denied this tool call."
+                session.append_tool_result(call_id, msg)
+                await emit(ToolResultEvent(id=call_id, preview=msg, blob=None, duration_ms=0))
+                return
+            if decision == "always":
+                session.mark_auto_approved(name)
+        # else: FS-safe and dangerous, or non-dangerous — fall through to execute.
+    elif (
         registry.is_dangerous(name)
         and not session.is_auto_approved(name)
         and not session.yolo
-        and not sandbox_auto_approve
     ):
         decision = await session.await_gate(call_id, name, args, emit, timeout=300)
         if decision == "deny":
@@ -151,6 +157,7 @@ async def _handle_action(
             return
         if decision == "always":
             session.mark_auto_approved(name)
+    # else: non-dangerous, OR sandbox-FS-safe, OR plain auto_approved/yolo — proceed.
 
     started = time.time()
     try:
