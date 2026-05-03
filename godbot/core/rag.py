@@ -51,3 +51,61 @@ class Embedder:
 
             self._st = SentenceTransformer("BAAI/bge-small-en-v1.5")
         return self._st.encode(texts, normalize_embeddings=True).tolist()
+
+
+def chunk_text(text: str, window: int = 40, overlap: int = 5) -> list[dict]:
+    """Line-window chunking. Returns chunks with content + start/end line numbers."""
+    lines = text.splitlines()
+    chunks: list[dict] = []
+    if not lines:
+        return chunks
+    step = max(1, window - overlap)
+    i = 0
+    while i < len(lines):
+        end = min(len(lines), i + window)
+        chunks.append(
+            {
+                "content": "\n".join(lines[i:end]),
+                "start_line": i + 1,
+                "end_line": end,
+            }
+        )
+        if end == len(lines):
+            break
+        i += step
+    return chunks
+
+
+def chunk_markdown(text: str) -> list[dict]:
+    """Heading-based markdown chunking."""
+    chunks: list[dict] = []
+    cur_heading = ""
+    cur_buf: list[str] = []
+    cur_start = 1
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if line.startswith("#"):
+            if cur_buf:
+                chunks.append(
+                    {
+                        "content": "\n".join(cur_buf),
+                        "heading": cur_heading,
+                        "start_line": cur_start,
+                        "end_line": lineno - 1,
+                    }
+                )
+                cur_buf = []
+            cur_heading = line.lstrip("# ").strip()
+            cur_start = lineno
+            cur_buf.append(line)
+        else:
+            cur_buf.append(line)
+    if cur_buf:
+        chunks.append(
+            {
+                "content": "\n".join(cur_buf),
+                "heading": cur_heading,
+                "start_line": cur_start,
+                "end_line": cur_start + len(cur_buf) - 1,
+            }
+        )
+    return chunks
