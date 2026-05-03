@@ -167,8 +167,11 @@ class Session:
                 except json.JSONDecodeError:
                     continue
 
-    def messages_for_llm(self) -> list[dict[str, Any]]:
-        return self._build_messages()
+    def messages_for_llm(self, max_context: Optional[int] = None) -> list[dict[str, Any]]:
+        msgs = self._build_messages()
+        if max_context is None or max_context <= 0:
+            return msgs
+        return _trim_to_context(msgs, max_context)
 
     def _build_messages(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -211,3 +214,30 @@ class Session:
         if not path.exists():
             raise FileNotFoundError(path)
         return path.read_text(encoding="utf-8")
+
+
+def _msg_tokens(m: dict[str, Any]) -> int:
+    if "content" in m and isinstance(m["content"], str):
+        return estimate_tokens(m["content"])
+    if m.get("tool_calls"):
+        return sum(estimate_tokens(json.dumps(tc)) for tc in m["tool_calls"])
+    return 0
+
+
+def _trim_to_context(msgs: list[dict[str, Any]], max_context: int) -> list[dict[str, Any]]:
+    soft = int(max_context * 0.8)
+    target = int(max_context * 0.7)
+    total = sum(_msg_tokens(m) for m in msgs)
+    if total <= soft:
+        return msgs
+    keep_tail = 2
+    head: list[dict[str, Any]] = []
+    droppable = msgs[:-keep_tail] if len(msgs) > keep_tail else []
+    tail = msgs[-keep_tail:] if len(msgs) > keep_tail else msgs
+    dropped = 0
+    while droppable and (sum(_msg_tokens(m) for m in head + droppable + tail) > target):
+        droppable.pop(0)
+        dropped += 1
+    if dropped:
+        head = [{"role": "system", "content": f"<elided {dropped} earlier messages>"}]
+    return head + droppable + tail
