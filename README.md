@@ -94,3 +94,41 @@ Discovered during implementation; track for the next pass:
 - **`tree-sitter-language-pack` pinned `<1.0`** (Phase 0.1). The 1.0 release changed the loader API in a way that breaks our chunker. Unpin and migrate when we have a quiet afternoon.
 - **Windows `bash.exe` resolves to the WSL stub, not Git Bash** (Phase 7.3). `run_bash` on a fresh Windows install will hit the "Windows Subsystem for Linux has no installed distributions" error instead of running the script. Workaround: prepend Git Bash to PATH or set `GODBOT_BASH=C:\Program Files\Git\bin\bash.exe`. Proper fix: probe known Git Bash install locations in the tool.
 - **DuckDuckGo HTML scraper is fragile** (Phase 7.4). DDG rotates anti-bot measures every few months and `web_search` will silently start returning empty results. The `tools/web_search_brave.py` drop-in is the recommended replacement once a Brave API key is in hand.
+
+## Discord bot
+
+Self-hosted single-owner Discord bot. Surfaces GodBot in any channel or DM.
+
+### Setup
+
+1. Create a bot at https://discord.com/developers/applications
+2. Enable `Message Content Intent` under "Bot"
+3. Generate an invite link with the `bot` scope and `Send Messages` + `Embed Links` permissions; invite to a server you own
+4. Add to `~/.godbot/config.toml`:
+   ```toml
+   [discord]
+   token = "<bot token from the developer portal>"
+   owner_id = <your discord user id, right-click yourself with developer mode on>
+   ```
+5. Install the optional dep:
+   ```bash
+   pip install -e ".[dev,discord]"
+   ```
+6. Run:
+   ```bash
+   godbot-discord                  # daemon-preferred
+   godbot-discord --no-daemon      # embedded only (single channel at a time; warning logged)
+   ```
+
+### Usage
+
+- **In a channel:** mention the bot — `@GodBot read main.py`
+- **In a DM:** just send a message
+- Each channel is its own session; sessions persist across bot restarts via `~/.godbot/discord-sessions.json`
+- Tool gates appear inline as button views — Allow / Always / Deny (owner only; 5-min auto-deny)
+
+### Limits
+
+- Solo-owner only — other users are silently ignored
+- Embedded mode (`--no-daemon`) serializes ALL channels through one global lock due to a known shared-env-var limitation (see "Known issues" above)
+- Discord rate-limits message edits; the bot throttles streaming to ~750ms / 400-char cadence
