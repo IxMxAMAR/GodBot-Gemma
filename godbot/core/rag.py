@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+from pathlib import Path
 from typing import Iterable
 import httpx
 
@@ -109,3 +110,45 @@ def chunk_markdown(text: str) -> list[dict]:
             }
         )
     return chunks
+
+
+class RagStore:
+    def __init__(self, root: Path, collection: str, embed_dim: int = 384) -> None:
+        import chromadb
+
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.client = chromadb.PersistentClient(path=str(self.root / collection))
+        self._coll = self.client.get_or_create_collection(name=collection)
+        self.embed_dim = embed_dim
+
+    def add(self, ids, embeddings, documents, metadatas) -> None:
+        if isinstance(documents, str):
+            documents = [documents]
+        if isinstance(metadatas, dict):
+            metadatas = [metadatas]
+        self._coll.upsert(
+            ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas
+        )
+
+    def search(self, embedding, top_k: int = 5) -> list[dict]:
+        res = self._coll.query(query_embeddings=[embedding], n_results=top_k)
+        out = []
+        ids = res["ids"][0]
+        docs = res["documents"][0]
+        metas = res["metadatas"][0]
+        scores = res.get("distances", [[]])[0]
+        for i in range(len(ids)):
+            out.append(
+                {
+                    "id": ids[i],
+                    "path": metas[i].get("path", ""),
+                    "lines": metas[i].get("lines", ""),
+                    "score": float(scores[i]) if i < len(scores) else 0.0,
+                    "content": docs[i],
+                }
+            )
+        return out
+
+    def list_collections(self) -> list[str]:
+        return [c.name for c in self.client.list_collections()]
