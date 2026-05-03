@@ -73,9 +73,48 @@ class Client:
         await self._request("POST", "/api/chat", json={"session_id": sid, "message": message})
 
     async def stream(self, sid: str) -> AsyncIterator[Event]:
-        # Implementation in Task 3.
-        raise NotImplementedError("stream() implemented in Task 3")
-        yield  # pragma: no cover  (makes this an async generator)
+        """Open the SSE stream for a session and yield parsed Event objects.
+
+        Drops `ping` heartbeat events. Stops after `DoneEvent` or stream close.
+        """
+        try:
+            async with self._c.stream(
+                "GET",
+                "/api/chat/stream",
+                params={"session_id": sid},
+                timeout=httpx.Timeout(None, connect=10.0),
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    raise ClientError(resp.status_code, body.decode("utf-8", "replace"))
+                event_name: Optional[str] = None
+                data_buf: list[str] = []
+                async for raw in resp.aiter_lines():
+                    if raw == "":
+                        # End of one SSE event — dispatch.
+                        if event_name and data_buf:
+                            data_str = "\n".join(data_buf)
+                            try:
+                                payload = json.loads(data_str)
+                            except json.JSONDecodeError:
+                                event_name, data_buf = None, []
+                                continue
+                            if event_name != "ping":
+                                ev = dict_to_event(payload)
+                                yield ev
+                                if ev.__class__.__name__ == "DoneEvent":
+                                    return
+                        event_name, data_buf = None, []
+                        continue
+                    if raw.startswith(":"):
+                        # SSE comment line.
+                        continue
+                    if raw.startswith("event:"):
+                        event_name = raw[6:].strip()
+                    elif raw.startswith("data:"):
+                        data_buf.append(raw[5:].lstrip())
+        except httpx.HTTPError as e:
+            raise ClientError(0, f"stream transport: {e}") from e
 
     # --- Gates / control ---
     async def resolve_gate(

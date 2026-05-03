@@ -54,3 +54,67 @@ async def test_non_2xx_raises_client_error():
         with pytest.raises(ClientError) as exc:
             await c.get_session("missing")
         assert exc.value.status_code == 404
+
+
+import json as _json
+from godbot.core.events import TokenEvent, DoneEvent
+
+
+def _sse_body(events: list[tuple[str, dict]]) -> str:
+    out = ""
+    for type_name, data in events:
+        out += f"event: {type_name}\ndata: {_json.dumps(data)}\n\n"
+    return out
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_yields_events_until_done():
+    body = _sse_body([
+        ("token", {"type": "token", "text": "hi"}),
+        ("token", {"type": "token", "text": " there"}),
+        ("done", {"type": "done", "step_count": 1}),
+    ])
+    respx.get("http://127.0.0.1:7878/api/chat/stream").mock(
+        return_value=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body
+        )
+    )
+    async with Client() as c:
+        events = []
+        async for ev in c.stream("s1"):
+            events.append(ev)
+    assert events == [TokenEvent(text="hi"), TokenEvent(text=" there"), DoneEvent(step_count=1)]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_drops_ping_heartbeats():
+    body = _sse_body([
+        ("ping", {}),
+        ("token", {"type": "token", "text": "ok"}),
+        ("ping", {}),
+        ("done", {"type": "done", "step_count": 1}),
+    ])
+    respx.get("http://127.0.0.1:7878/api/chat/stream").mock(
+        return_value=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body
+        )
+    )
+    async with Client() as c:
+        events = [ev async for ev in c.stream("s1")]
+    types = [type(e).__name__ for e in events]
+    assert types == ["TokenEvent", "DoneEvent"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_raises_on_error_status():
+    respx.get("http://127.0.0.1:7878/api/chat/stream").mock(
+        return_value=httpx.Response(409, content=b"")
+    )
+    async with Client() as c:
+        with pytest.raises(ClientError) as exc:
+            async for _ in c.stream("s1"):
+                pass
+        assert exc.value.status_code == 409
