@@ -84,10 +84,15 @@ class GodBotClient(discord.Client):
 
     def _get_session_factory(self, channel_id: int):
         sid = self._channel_sessions.get(channel_id)
+        workspace = self._channel_sessions.get_workspace(channel_id)
         def factory():
-            return EmbeddedRunner.create(
-                sessions_root=self.sessions_root, sid=sid,
-            )
+            if sid:
+                return EmbeddedRunner.create(sessions_root=self.sessions_root, sid=sid)
+            # Embedded creation also accepts workspace via core_session.set_workspace.
+            runner = EmbeddedRunner.create(sessions_root=self.sessions_root)
+            if workspace:
+                runner._core_session.set_workspace(workspace)
+            return runner
         return factory
 
     async def _process_message(self, channel: discord.abc.Messageable, text: str) -> None:
@@ -112,8 +117,9 @@ class GodBotClient(discord.Client):
                 "Start godbot-web to enable parallel channels."
             )
 
-        # Persist session id for next time.
-        self._channel_sessions.set(channel_id, session.sid)
+        # Persist session id (and workspace if known) for next time.
+        workspace = self._channel_sessions.get_workspace(channel_id)
+        self._channel_sessions.set(channel_id, session.sid, workspace=workspace)
 
         # Stream events.
         try:
