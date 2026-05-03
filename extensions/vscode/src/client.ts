@@ -62,6 +62,14 @@ export class GodBotClient {
     await this._req('POST', '/api/tools/toggle', { session_id: sid, name, enabled });
   }
 
+  async listRagCollections(): Promise<string[]> {
+    return await this._req('GET', '/api/rag/collections') as string[];
+  }
+
+  async useRagCollection(sid: string, collection: string | null): Promise<void> {
+    await this._req('POST', '/api/rag/use', { session_id: sid, collection });
+  }
+
   /**
    * Stream SSE events from /api/chat/stream until DoneEvent or close.
    * Yields parsed event objects. Drops `ping` heartbeats.
