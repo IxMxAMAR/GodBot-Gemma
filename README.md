@@ -34,6 +34,37 @@ Local agent harness for Gemma 3n E4B (or any Gemma) served by LM Studio. ReAct +
 - Tool toggles per session: web sidebar checkboxes, or `[tools] enabled = ["..."]` in config.
 - The default `web_search` uses DuckDuckGo HTML and breaks regularly. Drop in `tools/web_search_brave.py` (you provide the API key) when it does.
 
+## Workspace sandbox
+
+Confine the agent's filesystem reach to one directory. Combined with `--auto-approve`, the agent runs autonomously inside the workspace without confirming every file write.
+
+```bash
+godbot-tui --workspace ./scratch --auto-approve
+godbot-cli --workspace ./scratch --auto-approve
+```
+
+In the web UI: `POST /api/sessions/new` with body `{"workspace": "/abs/path", "auto_approve_in_sandbox": true}`.
+
+In VSCode: workspace defaults to your current VSCode workspace folder; toggle `godbot.autoApproveInSandbox` in settings to enable autonomous mode.
+
+In Discord: per-channel workspace via the (forthcoming) `/godbot workspace <path>` command.
+
+### What's confined and what isn't
+
+| Tool | Sandboxed? |
+|---|---|
+| `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `list_dir` | **HARD** — paths confined to workspace, escapes refused |
+| `read_blob` | by construction (only reads from active session's blobs) |
+| `run_python`, `run_powershell`, `run_bash` | **SOFT** — `cwd` set to workspace + `WORKSPACE_ROOT` env var, but the model can still `cd C:\Windows` mid-script |
+| `take_screenshot` | NOT sandboxed — writes to any path the model passes |
+| `web_fetch`, `web_search` | NOT sandboxed (network is out of scope) |
+
+### `--auto-approve` semantics
+
+When the workspace is active AND `--auto-approve` (or the equivalent setting) is on, dangerous tools in the **safe set** (`write_file`, `edit_file`) skip the gate prompt. Shell tools (`run_powershell`, `run_bash`, `run_python`) and `take_screenshot` STILL prompt for approval — they aren't in the safe set because the soft sandbox can't actually contain them.
+
+To skip ALL gates regardless of sandbox: use `--yolo`. That's the unrestricted mode.
+
 ## Live smoke test
 
 After upgrading LM Studio:
