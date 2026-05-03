@@ -215,6 +215,33 @@ class Session:
             raise FileNotFoundError(path)
         return path.read_text(encoding="utf-8")
 
+    def has_pending_gate(self, call_id: str) -> bool:
+        return call_id in self._gate_events and call_id not in self._gate_decisions
+
+    def resolve_gate(self, call_id: str, decision: str) -> bool:
+        if decision not in {"allow", "deny", "always"}:
+            raise ValueError(f"bad decision {decision!r}")
+        if call_id not in self._gate_events:
+            return False
+        self._gate_decisions[call_id] = decision
+        self._gate_events[call_id].set()
+        self.append_meta_event("gate_decision", {"call_id": call_id, "decision": decision})
+        return True
+
+    async def await_gate(
+        self, call_id: str, name: str, args: dict[str, Any], emit, timeout: float = 300.0,
+    ) -> str:
+        ev = asyncio.Event()
+        self._gate_events[call_id] = ev
+        await emit(GateEvent(id=call_id, name=name, args=args))
+        try:
+            await asyncio.wait_for(ev.wait(), timeout=timeout)
+            return self._gate_decisions.get(call_id, "deny")
+        except asyncio.TimeoutError:
+            return "deny"
+        finally:
+            self._gate_events.pop(call_id, None)
+
 
 def _msg_tokens(m: dict[str, Any]) -> int:
     if "content" in m and isinstance(m["content"], str):
