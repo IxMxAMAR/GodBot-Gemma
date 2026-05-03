@@ -116,7 +116,8 @@ def handle_slash(line: str, state: dict) -> tuple[str, object]:
     return ("unknown", line)
 
 
-async def run_repl(*, model: str = "auto", resume: Optional[str] = None, yolo: bool = False) -> int:
+async def run_repl(*, model: str = "auto", resume: Optional[str] = None, yolo: bool = False,
+                   workspace: Optional[str] = None, auto_approve: bool = False) -> int:
     """Interactive REPL. Imports kept lazy to avoid breaking unit tests."""
     from prompt_toolkit import PromptSession
     from godbot.config import load_config
@@ -138,10 +139,17 @@ async def run_repl(*, model: str = "auto", resume: Optional[str] = None, yolo: b
             print("no sessions to resume")
             return 1
         session = Session.load(sessions_root, existing[-1].name)
+        if workspace:
+            session.set_workspace(workspace, auto_approve=auto_approve)
     elif resume:
         session = Session.load(sessions_root, resume)
+        if workspace:
+            session.set_workspace(workspace, auto_approve=auto_approve)
     else:
-        session = Session.create(sessions_root, model=cfg.llm.model)
+        session = Session.create(
+            sessions_root, model=cfg.llm.model,
+            workspace_root=workspace, auto_approve_in_sandbox=auto_approve,
+        )
     if yolo:
         session.set_yolo(True)
     os.environ["GODBOT_ACTIVE_SESSION"] = str(session.dir)
@@ -209,8 +217,14 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--resume")
     p.add_argument("--yolo", action="store_true")
+    p.add_argument("--workspace", help="Confine FS tools to this directory")
+    p.add_argument("--auto-approve", action="store_true",
+                   help="Auto-approve FS-safe dangerous tools when --workspace is set")
     args = p.parse_args()
-    return asyncio.run(run_repl(resume=args.resume, yolo=args.yolo))
+    return asyncio.run(run_repl(
+        resume=args.resume, yolo=args.yolo,
+        workspace=args.workspace, auto_approve=args.auto_approve,
+    ))
 
 
 if __name__ == "__main__":

@@ -42,12 +42,16 @@ class TuiApp(App):
         auto_launch: bool = True,
         sid: Optional[str] = None,
         sessions_root: Optional[Path] = None,
+        workspace: Optional[str] = None,
+        auto_approve_in_sandbox: bool = False,
     ) -> None:
         super().__init__()
         self._base_url = base_url
         self._auto_launch = auto_launch
         self._sid = sid
         self._sessions_root = sessions_root or (Path.cwd() / "sessions")
+        self._workspace = workspace
+        self._auto_approve_in_sandbox = auto_approve_in_sandbox
         self._session: Optional[Session] = None
         self._stream_task: Optional[asyncio.Task] = None
 
@@ -87,6 +91,18 @@ class TuiApp(App):
         except Exception as e:
             self.conversation.post_message(_exception_to_error_event(e))
             return
+        # Apply workspace settings if provided. In daemon mode this is a no-op
+        # for the local Session helper; the workspace is per-session metadata
+        # that the daemon manages. In embedded mode, mutate the core session
+        # directly so the agent sees it on the next turn.
+        if self._workspace and self._session.mode == "embedded":
+            try:
+                runner = self._session._runner  # type: ignore[attr-defined]
+                runner._core_session.set_workspace(
+                    self._workspace, auto_approve=self._auto_approve_in_sandbox,
+                )
+            except AttributeError:
+                pass
         self.sub_title = f"{self._session.mode} · {self._session.sid}"
         await self._populate_sidebar()
 
@@ -175,12 +191,17 @@ def main() -> int:
     parser.add_argument("--no-daemon", action="store_true",
                         help="Skip daemon auto-launch; use embedded mode immediately.")
     parser.add_argument("--resume", help="Resume an existing session id.")
+    parser.add_argument("--workspace", help="Confine FS tools to this directory")
+    parser.add_argument("--auto-approve", action="store_true",
+                        help="Auto-approve FS-safe tools when --workspace is set")
     args = parser.parse_args()
 
     app = TuiApp(
         base_url=args.base_url,
         auto_launch=not args.no_daemon,
         sid=args.resume,
+        workspace=args.workspace,
+        auto_approve_in_sandbox=args.auto_approve,
     )
     app.run()
     return 0
