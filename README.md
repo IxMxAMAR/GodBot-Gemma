@@ -8,10 +8,15 @@ Local agent harness for Gemma 3n E4B (or any Gemma) served by LM Studio. ReAct +
 
 1. Install LM Studio. Load a Gemma 3n E4B (or compatible Gemma) model. Set context length >= 28k. Start the server on `localhost:1234`.
 2. (Optional) load an embedding model in LM Studio for RAG (e.g. `nomic-embed-text`). If absent, GodBot falls back to `BAAI/bge-small-en-v1.5` via `sentence-transformers`.
-3. Install:
+3. Create a dedicated venv (Python 3.11 or 3.12) and install:
    ```bash
-   pip install -e ".[dev]"
+   python -m venv .venv
+   .venv\Scripts\activate          # Windows
+   # source .venv/bin/activate      # POSIX
+   pip install -e ".[dev]"          # add ",discord" to enable the Discord bot extra
    ```
+
+   GodBot pulls heavy deps (chromadb, sentence-transformers, torch via transitive). Don't install into your system Python or share a venv with another project — pin one venv per checkout.
 
 ## Run
 
