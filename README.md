@@ -40,6 +40,7 @@ GODBOT_LIVE=1 pytest tests/test_lmstudio_smoke.py -v
 
 Discovered during implementation; track for the next pass:
 
+- **SSE stream is single-consumer** (Phase 9). Reloading the browser mid-tool-call closes the original SSE connection but the new tab cannot re-attach to the in-flight run — the server returns HTTP 409 on the second stream request. Wait for the current run to finish (or POST `/api/stop`) before reloading. Proper fix: buffer events per session and replay them to a reconnecting client.
 - **`save_note` blocks ~10s when LM Studio is absent** (Phase 10). The notes embedder probes LM Studio synchronously on first use. When the server is down, the connect timeout dominates the call. Workaround: set `[rag] embedder = "st"` in config to force the local sentence-transformers path. Proper fix: make the probe async with a short timeout and cache the negative result for the session.
 - **`tool_overrides` semantics footgun** (Phase 9). Empty list means "no tools enabled", `None` means "all tools enabled". Easy to send the wrong one from the web UI when the user toggles every tool off — the registry then exposes nothing and the model has no recourse. Consider a sentinel or explicit `disabled_tools` field instead.
 - **Module-level state in `web/app.py` is unbounded** (Phase 9). `_streams`, `_cancels`, and `_sessions_cache` accumulate per session id and never evict. Long-running web servers will leak memory proportional to total session count. Needs an LRU or session-close hook.

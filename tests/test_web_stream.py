@@ -14,10 +14,12 @@ def _reset_web_state():
     webmod._streams.clear()
     webmod._cancels.clear()
     webmod._sessions_cache.clear()
+    webmod._active_streams.clear()
     yield
     webmod._streams.clear()
     webmod._cancels.clear()
     webmod._sessions_cache.clear()
+    webmod._active_streams.clear()
 
 
 @pytest.fixture
@@ -61,3 +63,24 @@ def test_stop_endpoint_sets_cancel(app_with_mock):
     sid = c.post("/api/sessions/new").json()["session_id"]
     r = c.post("/api/stop", json={"session_id": sid})
     assert r.status_code == 200
+
+
+def test_second_stream_returns_409(app_with_mock):
+    """Two concurrent SSE consumers on the same session would race the queue;
+    the second connection must fail-fast with 409 rather than hang silently.
+    True resumability is deferred — see README 'Known issues'."""
+    app, _ = app_with_mock
+    c = TestClient(app)
+    sid = c.post("/api/sessions/new").json()["session_id"]
+
+    # Mark the stream as active without actually consuming, then verify a new
+    # connection is rejected. We poke the module state directly because
+    # opening two real concurrent SSE streams from the test client is awkward
+    # (the first stream context manager would block the test).
+    webmod._active_streams.add(sid)
+    try:
+        r = c.get(f"/api/chat/stream?session_id={sid}")
+        assert r.status_code == 409
+        assert "already attached" in r.text
+    finally:
+        webmod._active_streams.discard(sid)

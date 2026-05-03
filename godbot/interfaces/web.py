@@ -22,6 +22,10 @@ from godbot.prompts import build_system_prompt
 _streams: dict[str, asyncio.Queue] = {}
 _cancels: dict[str, asyncio.Event] = {}
 _sessions_cache: dict[str, Session] = {}
+# Sessions whose SSE stream currently has an attached consumer.
+# True resumability would require buffering all events for replay; for v0.1
+# we fail-fast with HTTP 409 instead of hanging the second connection.
+_active_streams: set[str] = set()
 
 
 def get_llm() -> LLMClient:
@@ -92,22 +96,33 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
     @app.get("/api/chat/stream")
     async def chat_stream(session_id: str):
         from sse_starlette.sse import EventSourceResponse
+        # Single-consumer guard. The Queue can only be drained once; a second
+        # consumer would silently hang (or worse, race the first). Fail fast.
+        if session_id in _active_streams:
+            raise HTTPException(
+                409,
+                "stream already attached; wait for current run or POST /api/stop",
+            )
         queue = _ensure_queue(session_id)
+        _active_streams.add(session_id)
 
         async def gen():
-            heartbeat_at = _loop_now() + 15
-            while True:
-                try:
-                    timeout = max(0.1, heartbeat_at - _loop_now())
-                    ev = await asyncio.wait_for(queue.get(), timeout=timeout)
-                except asyncio.TimeoutError:
-                    yield {"event": "ping", "data": "{}"}
-                    heartbeat_at = _loop_now() + 15
-                    continue
-                if ev is None:
-                    return
-                d = event_to_dict(ev)
-                yield {"event": d["type"], "data": json.dumps(d)}
+            try:
+                heartbeat_at = _loop_now() + 15
+                while True:
+                    try:
+                        timeout = max(0.1, heartbeat_at - _loop_now())
+                        ev = await asyncio.wait_for(queue.get(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        yield {"event": "ping", "data": "{}"}
+                        heartbeat_at = _loop_now() + 15
+                        continue
+                    if ev is None:
+                        return
+                    d = event_to_dict(ev)
+                    yield {"event": d["type"], "data": json.dumps(d)}
+            finally:
+                _active_streams.discard(session_id)
 
         return EventSourceResponse(gen())
 
