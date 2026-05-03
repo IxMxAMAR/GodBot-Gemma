@@ -32,6 +32,7 @@ class GateEvent:
 
 @dataclass(frozen=True)
 class ErrorEvent:
+    """Loop-level error event. ``recoverable=False`` terminates the turn."""
     message: str
     recoverable: bool = False
 
@@ -58,3 +59,13 @@ def event_to_dict(e: Event) -> dict[str, Any]:
     d = asdict(e)
     d["type"] = _TYPE_NAMES[type(e)]
     return d
+
+
+# Sanity: every Event Union member must be registered in _TYPE_NAMES.
+# Fails at module load (not at first use) if a new event type is added without registration.
+_registered = set(_TYPE_NAMES.keys())
+_declared = set(Event.__args__)
+assert _registered == _declared, (
+    f"_TYPE_NAMES out of sync with Event Union: "
+    f"missing={_declared - _registered}, extra={_registered - _declared}"
+)

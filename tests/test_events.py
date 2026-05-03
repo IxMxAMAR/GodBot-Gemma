@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from godbot.core.events import (
     TokenEvent, ToolCallEvent, ToolResultEvent,
     GateEvent, ErrorEvent, DoneEvent, event_to_dict,
@@ -39,3 +43,22 @@ def test_error_event_serializes():
 def test_done_event_serializes():
     e = DoneEvent(step_count=3)
     assert event_to_dict(e) == {"type": "done", "step_count": 3}
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        TokenEvent(text="hi"),
+        ToolCallEvent(id="c1", name="read_file", args={"path": "x.py", "n": 3}),
+        ToolResultEvent(id="c1", preview="ok", blob="c1", duration_ms=12),
+        ToolResultEvent(id="c2", preview="ok", blob=None, duration_ms=0),
+        GateEvent(id="c1", name="run_powershell", args={"cmd": "ls"}),
+        ErrorEvent(message="boom", recoverable=False),
+        ErrorEvent(message="retry me", recoverable=True),
+        DoneEvent(step_count=3),
+    ],
+)
+def test_event_serializes_to_json(event):
+    payload = event_to_dict(event)
+    roundtrip = json.loads(json.dumps(payload))
+    assert roundtrip == payload
