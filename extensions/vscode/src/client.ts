@@ -29,8 +29,15 @@ export class GodBotClient {
     }
   }
 
-  async newSession(model = 'auto'): Promise<string> {
-    const r = await this._req('POST', '/api/sessions/new', { model });
+  async newSession(
+    model = 'auto',
+    workspace?: string,
+    autoApproveInSandbox = false,
+  ): Promise<string> {
+    const body: Record<string, unknown> = { model };
+    if (workspace) body.workspace = workspace;
+    if (autoApproveInSandbox) body.auto_approve_in_sandbox = true;
+    const r = await this._req('POST', '/api/sessions/new', body);
     return (r as { session_id: string }).session_id;
   }
 

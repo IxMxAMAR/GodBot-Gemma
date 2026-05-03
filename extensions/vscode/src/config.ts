@@ -6,6 +6,8 @@ export interface GodbotConfig {
   autoLaunch: boolean;
   sessionsRoot: string;
   pythonPath: string;
+  workspace: string;
+  autoApproveInSandbox: boolean;
 }
 
 export function readConfig(): GodbotConfig {
@@ -15,5 +17,8 @@ export function readConfig(): GodbotConfig {
     autoLaunch: c.get<boolean>('autoLaunch', true),
     sessionsRoot: c.get<string>('sessionsRoot', ''),
     pythonPath: c.get<string>('pythonPath', '') || (process.platform === 'win32' ? 'python' : 'python3'),
+    workspace: c.get<string>('workspace', '') ||
+               (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ''),
+    autoApproveInSandbox: c.get<boolean>('autoApproveInSandbox', false),
   };
 }

@@ -2,7 +2,7 @@
   "name": "godbot-vscode",
   "displayName": "GodBot",
   "description": "Local agent harness — chat with GodBot inside VSCode",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "ixmxamar",
   "private": true,
   "engines": { "vscode": "^1.85.0" },
@@ -23,11 +23,13 @@
     "commands": [
       { "command": "godbot.askSelection", "title": "GodBot: Ask about selection" },
       { "command": "godbot.newSession", "title": "GodBot: New session" },
-      { "command": "godbot.openChat", "title": "GodBot: Open chat" }
+      { "command": "godbot.openChat", "title": "GodBot: Open chat" },
+      { "command": "godbot.openInEditor", "title": "GodBot: Open in editor" }
     ],
     "keybindings": [
       { "command": "godbot.askSelection", "key": "ctrl+alt+g", "when": "editorTextFocus" },
-      { "command": "godbot.newSession", "key": "ctrl+alt+n" }
+      { "command": "godbot.newSession", "key": "ctrl+alt+n" },
+      { "command": "godbot.openInEditor", "key": "ctrl+alt+shift+g" }
     ],
     "configuration": {
       "title": "GodBot",
@@ -51,6 +53,16 @@
           "type": "string",
           "default": "",
           "description": "Python interpreter for auto-launching the daemon (empty = 'python' on PATH)"
+        },
+        "godbot.workspace": {
+          "type": "string",
+          "default": "",
+          "description": "Confine FS tools to this directory (empty = use the current VSCode workspace folder)"
+        },
+        "godbot.autoApproveInSandbox": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-approve FS-safe dangerous tools when a workspace is configured"
         }
       }
     }

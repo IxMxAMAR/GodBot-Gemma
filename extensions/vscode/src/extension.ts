@@ -4,6 +4,7 @@ import * as childProcess from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { GodBotClient } from './client';
 import { ChatViewProvider } from './chatProvider';
+import { showChatPanel } from './chatPanel';
 import { createState } from './state';
 import { readConfig } from './config';
 
@@ -11,7 +12,7 @@ let providerSingleton: ChatViewProvider | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const cfg = readConfig();
-  const state = createState(cfg.baseUrl);
+  const state = createState(cfg.baseUrl, cfg.workspace, cfg.autoApproveInSandbox);
   state.client = new GodBotClient(cfg.baseUrl);
 
   // Ensure daemon is up.
@@ -38,6 +39,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, providerSingleton),
     vscode.commands.registerCommand('godbot.openChat', () => providerSingleton!.reveal()),
+    vscode.commands.registerCommand('godbot.openInEditor', () =>
+      showChatPanel(context.extensionUri, state),
+    ),
     vscode.commands.registerCommand('godbot.newSession', () => providerSingleton!.newSession()),
     vscode.commands.registerCommand('godbot.askSelection', async () => {
       const editor = vscode.window.activeTextEditor;

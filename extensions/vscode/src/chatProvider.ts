@@ -40,7 +40,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Force a new session (used by the New Session command). */
   async newSession(): Promise<void> {
     if (!this.state.client) return;
-    const sid = await this.state.client.newSession();
+    const sid = await this.state.client.newSession(
+      'auto',
+      this.state.workspace || undefined,
+      this.state.autoApproveInSandbox,
+    );
     this.state.sessionId = sid;
     this.postToWebview({ type: 'session', sid, mode: 'daemon' });
     this.postToWebview({ type: 'cleared' });
@@ -50,7 +54,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.state.client) return;
     if (!this.state.sessionId) {
       try {
-        this.state.sessionId = await this.state.client.newSession();
+        this.state.sessionId = await this.state.client.newSession(
+          'auto',
+          this.state.workspace || undefined,
+          this.state.autoApproveInSandbox,
+        );
       } catch (e) {
         this.postToWebview({ type: 'error', message: `daemon error: ${(e as Error).message}` });
         return;

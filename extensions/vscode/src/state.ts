@@ -7,14 +7,22 @@ export interface ExtensionState {
   baseUrl: string;
   active: boolean;  // true while a stream is in flight
   abortController: AbortController | null;
+  workspace: string;
+  autoApproveInSandbox: boolean;
 }
 
-export function createState(baseUrl: string): ExtensionState {
+export function createState(
+  baseUrl: string,
+  workspace: string = '',
+  autoApproveInSandbox: boolean = false,
+): ExtensionState {
   return {
     client: null,
     sessionId: null,
     baseUrl,
     active: false,
     abortController: null,
+    workspace,
+    autoApproveInSandbox,
   };
 }
