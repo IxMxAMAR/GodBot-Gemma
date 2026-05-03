@@ -12,10 +12,17 @@ from godbot.core.events import (
 from godbot.core.registry import Registry, ToolSpec
 from godbot.core.session import Session
 from godbot.core.schema import build_react_schema, validate_react_response
+from godbot.core.workspace import set_workspace, _current as _workspace_current
 
 
 EmitFn = Callable[[Event], Awaitable[None]]
 SystemPromptBuilder = Callable[[list[ToolSpec]], str]
+
+
+# Dangerous tools that are OK to skip the gate for when a workspace is active
+# AND the user has opted into sandbox auto-approval. FS-confined tools only;
+# shell tools stay gated because the soft sandbox can't actually contain them.
+SANDBOX_SAFE_DANGEROUS_TOOLS = {"write_file", "edit_file"}
 
 
 def _new_call_id() -> str:
@@ -48,46 +55,54 @@ async def run_turn(
     # that don't pass a builder.
     sys_prompt = system_prompt_builder(enabled) if system_prompt_builder is not None else system_prompt
 
-    for step in range(max_steps):
-        if cancel.is_set():
-            await emit(ErrorEvent(message="cancelled", recoverable=False))
-            return
+    # Activate the workspace contextvar for the duration of the turn so
+    # tools running in worker threads (asyncio.to_thread) inherit it.
+    ws = session.workspace
+    ws_token = set_workspace(ws) if ws is not None else None
+    try:
+        for step in range(max_steps):
+            if cancel.is_set():
+                await emit(ErrorEvent(message="cancelled", recoverable=False))
+                return
 
-        messages = [{"role": "system", "content": sys_prompt}] + session.messages_for_llm(max_context=max_context)
+            messages = [{"role": "system", "content": sys_prompt}] + session.messages_for_llm(max_context=max_context)
 
-        async def _on_delta(t: str) -> None:
-            await emit(TokenEvent(text=t))
+            async def _on_delta(t: str) -> None:
+                await emit(TokenEvent(text=t))
 
-        full_text = await llm.complete_streaming(
-            messages=messages,
-            on_delta=_on_delta,
-            response_format=response_format,
-            cancel=cancel,
-        )
-
-        try:
-            parsed = json.loads(full_text)
-        except json.JSONDecodeError as e:
-            session.append_synthetic_tool_result(
-                f"Your last reply was not valid JSON: {e}. Reply ONLY with the JSON object."
+            full_text = await llm.complete_streaming(
+                messages=messages,
+                on_delta=_on_delta,
+                response_format=response_format,
+                cancel=cancel,
             )
-            continue
 
-        err = validate_react_response(parsed, react_schema)
-        if err:
-            session.append_synthetic_tool_result(
-                f"Your last reply did not match the schema: {err}. Try again."
-            )
-            continue
+            try:
+                parsed = json.loads(full_text)
+            except json.JSONDecodeError as e:
+                session.append_synthetic_tool_result(
+                    f"Your last reply was not valid JSON: {e}. Reply ONLY with the JSON object."
+                )
+                continue
 
-        if "final_answer" in parsed:
-            session.append_assistant_final(parsed["final_answer"])
-            await emit(DoneEvent(step_count=step + 1))
-            return
+            err = validate_react_response(parsed, react_schema)
+            if err:
+                session.append_synthetic_tool_result(
+                    f"Your last reply did not match the schema: {err}. Try again."
+                )
+                continue
 
-        await _handle_action(parsed, session, registry, enabled, emit, cancel)
+            if "final_answer" in parsed:
+                session.append_assistant_final(parsed["final_answer"])
+                await emit(DoneEvent(step_count=step + 1))
+                return
 
-    await emit(ErrorEvent(message="max_steps exceeded", recoverable=False))
+            await _handle_action(parsed, session, registry, enabled, emit, cancel)
+
+        await emit(ErrorEvent(message="max_steps exceeded", recoverable=False))
+    finally:
+        if ws_token is not None:
+            _workspace_current.reset(ws_token)
 
 
 async def _handle_action(
@@ -112,7 +127,22 @@ async def _handle_action(
         await emit(ToolResultEvent(id=call_id, preview=msg, blob=None, duration_ms=0))
         return
 
-    if registry.is_dangerous(name) and not session.is_auto_approved(name) and not session.yolo:
+    # Workspace auto-approval: skip the gate if the sandbox is active AND the
+    # tool is in the FS-safe set. Shell tools stay gated even in sandbox mode.
+    ws = session.workspace
+    sandbox_auto_approve = (
+        ws is not None
+        and ws.auto_approve_in_sandbox
+        and registry.is_dangerous(name)
+        and name in SANDBOX_SAFE_DANGEROUS_TOOLS
+    )
+
+    if (
+        registry.is_dangerous(name)
+        and not session.is_auto_approved(name)
+        and not session.yolo
+        and not sandbox_auto_approve
+    ):
         decision = await session.await_gate(call_id, name, args, emit, timeout=300)
         if decision == "deny":
             msg = "User denied this tool call."
