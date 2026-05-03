@@ -1,0 +1,39 @@
+:root {
+  --bg: var(--vscode-editor-background);
+  --surface: var(--vscode-sideBar-background);
+  --text: var(--vscode-foreground);
+  --text-muted: var(--vscode-descriptionForeground);
+  --accent: var(--vscode-textLink-foreground);
+  --error: var(--vscode-errorForeground);
+  --border: var(--vscode-panel-border);
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 0; color: var(--text); background: var(--bg); font: 12px var(--vscode-editor-font-family, monospace); display: flex; flex-direction: column; height: 100vh; }
+#topbar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--surface); border-bottom: 1px solid var(--border); }
+#title { font-weight: 600; color: var(--accent); }
+#session-id { color: var(--text-muted); font-size: 10px; flex: 1; }
+#topbar button { background: transparent; border: none; color: var(--text); cursor: pointer; padding: 2px 6px; }
+#topbar button:hover { background: var(--bg); }
+#settings { padding: 4px 8px; background: var(--surface); border-bottom: 1px solid var(--border); font-size: 11px; }
+#settings summary { cursor: pointer; color: var(--text-muted); }
+#tool-list { list-style: none; padding: 4px 0 0 0; margin: 0; max-height: 200px; overflow: auto; }
+#tool-list li { padding: 1px 0; }
+#tool-list label { cursor: pointer; }
+#conversation { flex: 1; overflow-y: auto; padding: 8px; }
+.msg-user { background: var(--accent); color: var(--bg); padding: 4px 8px; border-radius: 4px; margin: 4px 0 4px 24px; white-space: pre-wrap; }
+.msg-assistant { padding: 4px 0; white-space: pre-wrap; }
+.tool-card { border-left: 2px solid var(--accent); background: var(--surface); padding: 4px 8px; margin: 4px 0; }
+.tool-card[data-group="fs"] { border-color: #60a5fa; }
+.tool-card[data-group="shell"] { border-color: #f87171; }
+.tool-card[data-group="web"] { border-color: #4ade80; }
+.tool-card[data-group="python"] { border-color: #c084fc; }
+.tool-card[data-group="memory"] { border-color: #2dd4bf; }
+.tool-card[data-group="task"] { border-color: #fbbf24; }
+.tool-card[data-group="rag"] { border-color: #a78bfa; }
+.tool-card .body { font-size: 11px; color: var(--text-muted); margin-top: 2px; max-height: 200px; overflow: auto; white-space: pre-wrap; }
+.gate-card { border: 1px solid var(--error); padding: 8px; margin: 4px 0; background: var(--surface); }
+.gate-card button { margin-right: 4px; padding: 2px 8px; }
+.error-banner { background: var(--error); color: white; padding: 4px 8px; margin: 4px 0; border-radius: 2px; }
+#composer { display: flex; padding: 6px; gap: 6px; background: var(--surface); border-top: 1px solid var(--border); }
+#input { flex: 1; min-height: 40px; max-height: 120px; resize: vertical; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 4px; font: inherit; }
+#send { padding: 0 12px; background: var(--accent); border: none; color: var(--bg); cursor: pointer; }
