@@ -3,18 +3,19 @@ import asyncio
 import json
 import time
 import uuid
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Optional
 
 from godbot.core.events import (
     DoneEvent, ErrorEvent, Event, GateEvent,
     TokenEvent, ToolCallEvent, ToolResultEvent,
 )
-from godbot.core.registry import Registry
+from godbot.core.registry import Registry, ToolSpec
 from godbot.core.session import Session
 from godbot.core.schema import build_react_schema, validate_react_response
 
 
 EmitFn = Callable[[Event], Awaitable[None]]
+SystemPromptBuilder = Callable[[list[ToolSpec]], str]
 
 
 def _new_call_id() -> str:
@@ -31,6 +32,7 @@ async def run_turn(
     max_steps: int,
     max_context: int,
     system_prompt: str,
+    system_prompt_builder: Optional[SystemPromptBuilder] = None,
 ) -> None:
     enabled = registry.subset(session.tool_overrides)
     tool_schemas = {t.name: t.schema for t in enabled}
@@ -40,12 +42,18 @@ async def run_turn(
         "json_schema": {"name": "react", "schema": react_schema, "strict": True},
     }
 
+    # Build the system prompt from the filtered tool subset so the model never
+    # sees catalog entries that the schema enum would reject anyway. Falls
+    # back to the static `system_prompt` string for back-compat with callers
+    # that don't pass a builder.
+    sys_prompt = system_prompt_builder(enabled) if system_prompt_builder is not None else system_prompt
+
     for step in range(max_steps):
         if cancel.is_set():
             await emit(ErrorEvent(message="cancelled", recoverable=False))
             return
 
-        messages = [{"role": "system", "content": system_prompt}] + session.messages_for_llm(max_context=max_context)
+        messages = [{"role": "system", "content": sys_prompt}] + session.messages_for_llm(max_context=max_context)
 
         async def _on_delta(t: str) -> None:
             await emit(TokenEvent(text=t))

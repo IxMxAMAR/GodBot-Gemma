@@ -185,7 +185,6 @@ async def run_repl(*, model: str = "auto", resume: Optional[str] = None, yolo: b
         session.append_user(payload)
         cancel = asyncio.Event()
         state["cancel"] = cancel
-        sys_prompt = build_system_prompt(DEFAULT.all())
 
         async def emit(ev):
             renderer.handle(ev)
@@ -197,7 +196,8 @@ async def run_repl(*, model: str = "auto", resume: Optional[str] = None, yolo: b
         await run_turn(
             llm=llm, session=session, registry=DEFAULT, emit=emit,
             cancel=cancel, max_steps=cfg.agent.max_steps,
-            max_context=cfg.llm.max_context, system_prompt=sys_prompt,
+            max_context=cfg.llm.max_context, system_prompt="",
+            system_prompt_builder=build_system_prompt,
         )
 
 
