@@ -196,3 +196,18 @@ class Session:
             elif t == "synthetic_tool_result":
                 out.append({"role": "user", "content": f"<system>{ev['content']}</system>"})
         return out
+
+    def record_tool_result(self, call_id: str, full_result: str) -> str:
+        blob_id: Optional[str] = None
+        if len(full_result) > BLOB_INLINE_LIMIT:
+            blob_id = call_id
+            (self.dir / "blobs" / f"{call_id}.txt").write_text(full_result, encoding="utf-8")
+        llm_view = _truncate_for_llm(full_result, call_id)
+        self.append_tool_result(call_id, llm_view, blob=blob_id)
+        return llm_view
+
+    def read_blob(self, call_id: str) -> str:
+        path = self.dir / "blobs" / f"{call_id}.txt"
+        if not path.exists():
+            raise FileNotFoundError(path)
+        return path.read_text(encoding="utf-8")
