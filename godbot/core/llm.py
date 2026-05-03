@@ -48,3 +48,58 @@ class LLMClient:
         if self._info is None:
             return self.probe()
         return self._info
+
+    async def complete_streaming(
+        self,
+        messages: list[dict[str, Any]],
+        on_delta: Callable[[str], Any],
+        response_format: Optional[dict[str, Any]] = None,
+        cancel: Optional[asyncio.Event] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> str:
+        """POST /v1/chat/completions with stream=true.
+
+        Accumulates content deltas, awaits on_delta for each. Returns full
+        assistant content. If cancel is set during streaming, closes the HTTP
+        response and returns the partial content received so far.
+        """
+        if cancel is not None and cancel.is_set():
+            return ""
+
+        body: dict[str, Any] = {
+            "model": self.info.id,
+            "messages": messages,
+            "stream": True,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if response_format is not None:
+            body["response_format"] = response_format
+
+        full_parts: list[str] = []
+        url = f"{self.base_url}/chat/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10.0)) as client:
+            async with client.stream("POST", url, json=body, headers=headers) as resp:
+                resp.raise_for_status()
+                async for raw in resp.aiter_lines():
+                    if not raw or not raw.startswith("data:"):
+                        continue
+                    data = raw[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    if cancel is not None and cancel.is_set():
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                    if delta:
+                        full_parts.append(delta)
+                        result = on_delta(delta)
+                        if asyncio.iscoroutine(result):
+                            await result
+        return "".join(full_parts)
