@@ -212,7 +212,12 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             body = await request.json()
         except Exception:
             pass
-        s = Session.create(sessions_root, model=body.get("model", "auto"))
+        s = Session.create(
+            sessions_root,
+            model=body.get("model", "auto"),
+            workspace_root=body.get("workspace"),
+            auto_approve_in_sandbox=bool(body.get("auto_approve_in_sandbox", False)),
+        )
         return {"session_id": s.id}
 
     @app.get("/api/sessions")
@@ -242,6 +247,8 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             "auto_approved_tools": list(s._meta.get("auto_approved_tools", [])),
             "tool_overrides": s.tool_overrides,
             "rag_collection": s.rag_collection,
+            "workspace_root": s._meta.get("workspace_root"),
+            "auto_approve_in_sandbox": bool(s._meta.get("auto_approve_in_sandbox", False)),
         }
 
     _register_endpoints(app, sessions_root)
