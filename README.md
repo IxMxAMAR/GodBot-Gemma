@@ -36,6 +36,38 @@ After upgrading LM Studio:
 GODBOT_LIVE=1 pytest tests/test_lmstudio_smoke.py -v
 ```
 
+## Client library
+
+GodBot ships a Python client at `godbot.client` for building new surfaces (TUI, Discord, VSCode, custom integrations).
+
+Two layers:
+
+- **`Client`** — slim async HTTP/SSE wrapper around the daemon. Use directly when you know the daemon is up.
+- **`Session`** — mode-transparent helper. Probes the daemon on connect; falls back to an embedded in-process agent loop if no daemon. Optional auto-launch.
+
+```python
+from godbot.client import Session
+
+async with Session(auto_launch=True) as s:
+    async for ev in s.run("hello"):
+        print(ev)
+```
+
+Embedded mode (no daemon, no auto-launch):
+
+```python
+from pathlib import Path
+from godbot.client import Session
+from godbot.client.embedded import EmbeddedRunner
+
+def factory():
+    return EmbeddedRunner.create(sessions_root=Path("sessions"))
+
+async with Session(embedded_factory=factory) as s:
+    async for ev in s.run("hello"):
+        print(ev)
+```
+
 ## Known issues / follow-ups
 
 Discovered during implementation; track for the next pass:
