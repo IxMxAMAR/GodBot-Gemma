@@ -75,3 +75,56 @@ def test_tool_with_list_arg():
 
     spec = reg.spec("f")
     assert spec.schema["properties"]["items"]["type"] == "array"
+
+
+def test_execute_runs_tool_and_returns_string():
+    reg = Registry()
+
+    @reg.tool()
+    def add(a: int, b: int) -> str:
+        """Add two numbers."""
+        return str(a + b)
+
+    assert reg.execute("add", {"a": 2, "b": 3}) == "5"
+
+
+def test_execute_unknown_tool_raises():
+    reg = Registry()
+    with pytest.raises(KeyError):
+        reg.execute("nope", {})
+
+
+def test_validate_args_ok():
+    reg = Registry()
+
+    @reg.tool()
+    def f(name: str) -> str:
+        """desc."""
+        return name
+
+    assert reg.validate_args("f", {"name": "x"}) is None
+
+
+def test_validate_args_missing_required():
+    reg = Registry()
+
+    @reg.tool()
+    def f(name: str) -> str:
+        """desc."""
+        return name
+
+    err = reg.validate_args("f", {})
+    assert err is not None and "name" in err
+
+
+def test_execute_coerces_return_to_string():
+    reg = Registry()
+
+    @reg.tool()
+    def listy(n: int) -> list:
+        """desc."""
+        return list(range(n))
+
+    out = reg.execute("listy", {"n": 3})
+    assert isinstance(out, str)
+    assert "0" in out and "2" in out

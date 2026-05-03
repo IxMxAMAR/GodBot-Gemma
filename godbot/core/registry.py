@@ -68,6 +68,26 @@ class Registry:
         s = self._tools.get(name)
         return s.timeout if s else 60
 
+    def validate_args(self, name: str, args: dict[str, Any]) -> Optional[str]:
+        spec = self._tools.get(name)
+        if spec is None:
+            return f"unknown tool {name!r}"
+        try:
+            import jsonschema
+            jsonschema.validate(args, spec.schema)
+            return None
+        except Exception as e:
+            return str(getattr(e, "message", e))
+
+    def execute(self, name: str, args: dict[str, Any]) -> str:
+        spec = self._tools.get(name)
+        if spec is None:
+            raise KeyError(name)
+        result = spec.fn(**args)
+        if isinstance(result, str):
+            return result
+        return str(result)
+
 
 # Module-level default registry — used by tools/ auto-discovery.
 DEFAULT = Registry()
