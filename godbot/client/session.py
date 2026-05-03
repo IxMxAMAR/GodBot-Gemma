@@ -108,6 +108,35 @@ class Session:
         elif self._mode == "embedded":
             await self._runner.stop()
 
+    async def toggle_tool(self, name: str, enabled: bool) -> None:
+        """Enable/disable a tool for this session.
+
+        Daemon mode: POSTs to /api/tools/toggle.
+        Embedded mode: mutates the core session's tool_overrides list.
+        """
+        if self._mode == "daemon":
+            await self._client.toggle_tool(self._sid, name, enabled)
+        elif self._mode == "embedded":
+            from godbot.core.registry import DEFAULT
+            cs = self._runner._core_session
+            current = list(cs.tool_overrides or [t.name for t in DEFAULT.all()])
+            if enabled and name not in current:
+                current.append(name)
+            elif not enabled and name in current:
+                current.remove(name)
+            cs.set_tool_overrides(sorted(current))
+        else:
+            raise RuntimeError("Session not connected")
+
+    async def use_rag_collection(self, collection: Optional[str]) -> None:
+        """Switch the active RAG collection for this session."""
+        if self._mode == "daemon":
+            await self._client.use_rag_collection(self._sid, collection)
+        elif self._mode == "embedded":
+            self._runner._core_session.set_rag_collection(collection)
+        else:
+            raise RuntimeError("Session not connected")
+
     async def close(self) -> None:
         if self._client is not None:
             await self._client.__aexit__(None, None, None)
