@@ -64,6 +64,23 @@ def event_to_dict(e: Event) -> dict[str, Any]:
     return d
 
 
+_NAME_TO_CLASS: dict[str, type] = {v: k for k, v in _TYPE_NAMES.items()}
+
+
+def dict_to_event(d: dict[str, Any]) -> Event:
+    """Reconstruct an Event from its serialized dict.
+
+    Does not mutate the input. Tolerates unknown fields by filtering against
+    the dataclass's declared fields.
+    """
+    payload = dict(d)
+    type_name = payload.pop("type")
+    cls = _NAME_TO_CLASS[type_name]
+    known = {f.name for f in cls.__dataclass_fields__.values()}
+    filtered = {k: v for k, v in payload.items() if k in known}
+    return cls(**filtered)
+
+
 # Sanity: every Event Union member must be registered in _TYPE_NAMES.
 # Fails at module load (not at first use) if a new event type is added without registration.
 _registered = set(_TYPE_NAMES.keys())
