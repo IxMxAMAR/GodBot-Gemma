@@ -1,0 +1,29 @@
+/* godbot/interfaces/tui.tcss */
+Screen {
+    background: $background;
+}
+
+Header {
+    background: $surface;
+    color: $text;
+    text-style: bold;
+}
+
+#main {
+    width: 1fr;
+    height: 100%;
+}
+
+ConversationView {
+    height: 1fr;
+}
+
+MessageInput {
+    background: $surface;
+    border-top: solid $primary;
+}
+
+Footer {
+    background: $surface;
+    color: $text-muted;
+}
