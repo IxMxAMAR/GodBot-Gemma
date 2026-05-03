@@ -254,11 +254,20 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
 
 
 def main() -> int:
+    import argparse
     import uvicorn
     from godbot.config import load_config
+    parser = argparse.ArgumentParser(prog="godbot-web")
+    parser.add_argument("--sessions-root", default=None,
+                        help="Where to store sessions (default: ./sessions in cwd)")
+    parser.add_argument("--port", type=int, default=None,
+                        help="Override the configured web port")
+    args = parser.parse_args()
     cfg = load_config()
-    app = build_app()
-    uvicorn.run(app, host="127.0.0.1", port=cfg.ui.web_port)
+    sessions_root = Path(args.sessions_root) if args.sessions_root else None
+    app = build_app(sessions_root=sessions_root)
+    port = args.port if args.port is not None else cfg.ui.web_port
+    uvicorn.run(app, host="127.0.0.1", port=port)
     return 0
 
 

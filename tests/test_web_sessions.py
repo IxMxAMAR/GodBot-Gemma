@@ -33,3 +33,15 @@ def test_get_session_history(tmp_path, monkeypatch):
     body = r.json()
     assert body["id"] == sid
     assert body["messages"] == []
+
+
+def test_main_help_includes_new_flags():
+    import subprocess
+    import sys
+    r = subprocess.run(
+        [sys.executable, "-m", "godbot.interfaces.web", "--help"],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert r.returncode == 0
+    assert "--sessions-root" in r.stdout
+    assert "--port" in r.stdout

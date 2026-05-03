@@ -70,8 +70,12 @@ export function deactivate(): void {
 
 async function tryLaunchDaemon(cfg: ReturnType<typeof readConfig>): Promise<boolean> {
   const cwd = cfg.sessionsRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+  const args = ['-m', 'godbot.interfaces.web'];
+  if (cfg.sessionsRoot) {
+    args.push('--sessions-root', cfg.sessionsRoot);
+  }
   try {
-    const proc = childProcess.spawn(cfg.pythonPath, ['-m', 'godbot.interfaces.web'], {
+    const proc = childProcess.spawn(cfg.pythonPath, args, {
       cwd,
       detached: true,
       stdio: 'ignore',
