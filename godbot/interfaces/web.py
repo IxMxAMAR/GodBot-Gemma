@@ -487,6 +487,76 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
         sent = DEFAULT_RUNNER.cancel_task(tid)
         return {"ok": True, "sent": sent}
 
+    @app.get("/api/tasks/{tid}/stream")
+    async def task_stream(request: Request, tid: str, last_event_id: int = 0):
+        """SSE stream of live progress for one background task (sub-project 25).
+
+        Reuses the EventLog primitive from the chat stream: each task
+        owns a log seeded with a ``status: pending`` event and updated
+        with ``status``, ``tool_call``, ``tool_result``, ``done``, and
+        ``agent_error`` events as the runner makes progress.
+        Reconnecting clients send ``Last-Event-ID`` to resume from their
+        cursor; late subscribers replay the buffered events.
+        """
+        from sse_starlette.sse import EventSourceResponse
+        from godbot.core.tasks import DEFAULT_RUNNER
+
+        if DEFAULT_RUNNER.get_task(tid) is None:
+            raise HTTPException(404, "no such task")
+        log = DEFAULT_RUNNER.get_event_log(tid)
+        if log is None:
+            # Task exists in the persisted records but has no live log
+            # (e.g. loaded from disk after a daemon restart). Surface a
+            # one-shot status event with the current record and exit so
+            # the client knows the task is terminal.
+            rec = DEFAULT_RUNNER.get_task(tid)
+
+            async def gen_static():
+                yield {
+                    "id": "1",
+                    "event": "status",
+                    "data": json.dumps({
+                        "tid": tid, "status": rec.status,
+                        "result": rec.result, "error": rec.error,
+                    }),
+                }
+
+            return EventSourceResponse(gen_static())
+
+        hdr = request.headers.get("last-event-id")
+        if hdr:
+            try:
+                last_event_id = int(hdr)
+            except ValueError:
+                pass
+
+        async def gen():
+            heartbeat_at = _loop_now() + 15
+            cursor = last_event_id
+            async for ev in log.follow(since_seq=cursor, idle_timeout=1.0):
+                if ev.name == "__idle__":
+                    if _loop_now() >= heartbeat_at:
+                        yield {"event": "ping", "data": "{}"}
+                        heartbeat_at = _loop_now() + 15
+                    continue
+                yield {
+                    "id": str(ev.seq),
+                    "event": ev.name,
+                    "data": json.dumps(ev.data),
+                }
+                cursor = ev.seq
+                # `done` and the terminal `status` row both signal
+                # "agent finished"; close the SSE so the client doesn't
+                # hang waiting for keepalives on a closed log.
+                if ev.name == "done":
+                    return
+                if ev.name == "status" and ev.data.get("status") in (
+                    "done", "error", "cancelled", "interrupted",
+                ):
+                    return
+
+        return EventSourceResponse(gen())
+
     @app.post("/api/complete")
     async def inline_complete(request: Request):
         """Cursor-style inline completion (sub-project 12).

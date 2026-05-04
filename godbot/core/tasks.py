@@ -44,6 +44,10 @@ from godbot.core.events import (
     ToolCallEvent,
     ToolResultEvent,
 )
+# Imported under a forward-string annotation above to avoid circular imports
+# at module load — godbot.core.event_log doesn't depend on tasks but we
+# keep the runtime import light.
+from godbot.core.event_log import EventLog as _EventLogType
 
 log = logging.getLogger("godbot.tasks")
 
@@ -86,6 +90,19 @@ class TaskRunner:
         self._cancels: dict[str, asyncio.Event] = {}
         self._asyncio_tasks: dict[str, asyncio.Task] = {}
         self._persist_dir = persist_dir
+        # Per-task EventLogs (sub-project 25). Keyed by tid. Populated by
+        # start_task; subscribers attach via the SSE endpoint and replay
+        # buffered events. EventLogs are process-local — not persisted.
+        self._task_logs: dict[str, "_EventLogType"] = {}
+
+    def get_event_log(self, tid: str):
+        """Return the per-task EventLog if one exists, else None.
+
+        The web layer's SSE endpoint uses this to attach a subscriber.
+        Returns None for tasks that have already been GC'd or for unknown
+        ids.
+        """
+        return self._task_logs.get(tid)
 
     # --- persistence --------------------------------------------------
 
@@ -179,6 +196,12 @@ class TaskRunner:
         self._persist(rec)
         cancel = asyncio.Event()
         self._cancels[tid] = cancel
+        # Per-task event log (sub-project 25). Subscribers reach this via
+        # get_event_log(tid). The log is closed in the runner's finally
+        # block so any tail subscribers exit cleanly.
+        ev_log = _EventLogType()
+        self._task_logs[tid] = ev_log
+        ev_log.publish("status", {"tid": tid, "status": "pending", "goal": goal})
 
         # Session is created in the worker task to keep start_task fast and
         # to ensure the session lives on the runner thread's event loop.
@@ -191,6 +214,7 @@ class TaskRunner:
         async def _runner() -> None:
             rec.status = "running"
             self._persist(rec)
+            ev_log.publish("status", {"tid": tid, "status": "running"})
             try:
                 session = Session.create(
                     sessions_root,
@@ -224,6 +248,9 @@ class TaskRunner:
                         rec.tool_calls.append({
                             "id": ev.id, "name": ev.name, "args": ev.args,
                         })
+                        ev_log.publish("tool_call", {
+                            "id": ev.id, "name": ev.name, "args": ev.args,
+                        })
                     elif isinstance(ev, ToolResultEvent):
                         # Patch the matching tool-call entry with the preview.
                         for tc in rec.tool_calls:
@@ -231,10 +258,17 @@ class TaskRunner:
                                 tc["result_preview"] = ev.preview
                                 tc["duration_ms"] = ev.duration_ms
                                 break
+                        ev_log.publish("tool_result", {
+                            "id": ev.id,
+                            "preview": ev.preview,
+                            "duration_ms": ev.duration_ms,
+                        })
                     elif isinstance(ev, DoneEvent):
                         rec.step_count = ev.step_count
+                        ev_log.publish("done", {"step_count": ev.step_count})
                     elif isinstance(ev, ErrorEvent):
                         rec.error = ev.message
+                        ev_log.publish("agent_error", {"message": ev.message})
 
                 await run_turn(
                     session=session,
@@ -273,6 +307,17 @@ class TaskRunner:
                 self._cancels.pop(tid, None)
                 self._asyncio_tasks.pop(tid, None)
                 self._persist(rec)
+                # Publish a terminal status record into the EventLog so
+                # subscribers that joined late see the final state, then
+                # close the log so their follow() generators exit.
+                try:
+                    ev_log.publish("status", {
+                        "tid": tid, "status": rec.status,
+                        "result": rec.result, "error": rec.error,
+                    })
+                except RuntimeError:
+                    pass  # already closed elsewhere
+                ev_log.close()
 
         t = asyncio.get_running_loop().create_task(_runner(), name=f"task-{tid}")
         self._asyncio_tasks[tid] = t
