@@ -747,6 +747,34 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             raise HTTPException(404, "no such session")
         return s.usage
 
+    @app.get("/api/sessions/{sid}/cost")
+    async def session_cost(sid: str):
+        """Estimated USD cost for one session (sub-project 23).
+
+        Multiplies session usage by the rate from the configured pricing
+        table (builtin defaults overlaid with ``~/.godbot/pricing.toml``).
+        Returns ``matched=False`` with ``usd=0`` when the (provider, model)
+        pair has no rate row — the UI should render "(rate unknown)" in
+        that case rather than a misleading zero. Local providers (LM
+        Studio, Ollama, vLLM) are always $0 with ``matched=True``.
+        """
+        from godbot.core.pricing import compute_cost
+
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        usage = s.usage
+        breakdown = compute_cost(
+            provider=s.provider,
+            model=s.model_name or s.model,
+            input_tokens=usage["input_tokens"],
+            output_tokens=usage["output_tokens"],
+        )
+        out = breakdown.to_dict()
+        out["usage"] = usage
+        return out
+
     _register_endpoints(app, sessions_root)
 
     # OpenAI-compatible /v1/chat/completions shim (sub-project 8). Lets
