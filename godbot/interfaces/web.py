@@ -300,6 +300,27 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
             for t in DEFAULT.all()
         ]
 
+    @app.post("/api/tools/reload")
+    async def tools_reload():
+        """Re-import every godbot.tools.* module (sub-project 27).
+
+        Picks up code changes to existing tool modules without a daemon
+        restart. Useful while developing a custom tool — edit the file,
+        POST here, your @tool decorators re-fire and overwrite their
+        registry entries. Returns the new tool count.
+
+        Modules whose files were *deleted* are NOT pruned from the
+        registry — that's intentional for v1 since "tool I'm working on
+        threw on import once" shouldn't permanently lose the prior
+        registration. Restart the daemon to GC dead entries.
+        """
+        from godbot.tools import reload_all
+        try:
+            count = reload_all()
+        except Exception as e:
+            raise HTTPException(500, f"reload failed: {type(e).__name__}: {e}")
+        return {"ok": True, "modules_reloaded": count, "tools_registered": len(DEFAULT.all())}
+
     @app.post("/api/tools/toggle")
     async def tool_toggle(request: Request):
         body = await request.json()
