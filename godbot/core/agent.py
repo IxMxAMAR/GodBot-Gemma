@@ -59,6 +59,21 @@ async def run_turn(
     # tools running in worker threads (asyncio.to_thread) inherit it.
     ws = session.workspace
     ws_token = set_workspace(ws) if ws is not None else None
+
+    # Inject prior-session context for this workspace so the model has continuity
+    # across launches. Only on the first turn (when the session has no prior
+    # assistant messages) — otherwise we'd duplicate context every turn.
+    if ws is not None and not any(
+        ev.get("type") in ("assistant_final", "assistant_tool_call")
+        for ev in session._events()
+    ):
+        try:
+            from godbot.tools.memory import load_recent_workspace_notes
+            mem = load_recent_workspace_notes(str(ws.root), limit=5)
+            if mem:
+                sys_prompt = sys_prompt + "\n\n" + mem
+        except Exception:
+            pass  # memory injection is best-effort
     try:
         for step in range(max_steps):
             if cancel.is_set():

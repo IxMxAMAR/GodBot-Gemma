@@ -14,11 +14,28 @@ def _notes_dir() -> Path:
     return d
 
 
+def _active_workspace() -> str | None:
+    """Read workspace from contextvar (set by agent loop) or env fallback."""
+    try:
+        from godbot.core.workspace import current_workspace
+        ws = current_workspace()
+        if ws is not None:
+            return str(ws.root)
+    except Exception:
+        pass
+    return os.environ.get("WORKSPACE_ROOT")
+
+
 @tool()
 def save_note(content: str, tags: list[str] | None = None) -> str:
-    """Save a note + embed it into the _notes RAG collection."""
+    """Save a note. Auto-tags with the active workspace path.
+
+    Notes saved while a workspace is active are scoped to that workspace and
+    will be returned by recall_notes for that workspace by default.
+    """
     if tags is None:
         tags = []
+    workspace = _active_workspace()
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
     # Ensure uniqueness even when two saves land in the same microsecond
     # (Windows time resolution can collapse %f).
@@ -30,10 +47,13 @@ def save_note(content: str, tags: list[str] | None = None) -> str:
         n += 1
         uniq_ts = f"{ts}_{n}"
         p = base / f"{uniq_ts}.json"
-    p.write_text(
-        json.dumps({"timestamp": ts, "content": content, "tags": tags}, indent=2),
-        encoding="utf-8",
-    )
+    record = {
+        "timestamp": ts,
+        "content": content,
+        "tags": tags,
+        "workspace": workspace,
+    }
+    p.write_text(json.dumps(record, indent=2), encoding="utf-8")
     try:
         from godbot.core.rag import Embedder, RagStore
 
@@ -44,7 +64,12 @@ def save_note(content: str, tags: list[str] | None = None) -> str:
             ids=[uniq_ts],
             embeddings=emb.embed([content]),
             documents=[content],
-            metadatas=[{"path": str(p), "lines": "1-1", "tags": ",".join(tags)}],
+            metadatas=[{
+                "path": str(p),
+                "lines": "1-1",
+                "tags": ",".join(tags),
+                "workspace": workspace or "",
+            }],
         )
     except Exception as e:
         return f"ok: saved note {p.name} (RAG embed failed: {e})"
@@ -52,16 +77,47 @@ def save_note(content: str, tags: list[str] | None = None) -> str:
 
 
 @tool()
-def recall_notes(query: str = "", top_k: int = 10) -> str:
-    """Semantic search saved notes (substring fallback if RAG unavailable)."""
+def auto_journal(summary: str) -> str:
+    """Save a short end-of-task summary to the active workspace's journal.
+
+    Use this when finishing a multi-turn task. One paragraph, ~3-5 sentences:
+    what the user wanted, what got done, what's still pending. The next session
+    in this workspace will see recent journals automatically.
+    """
+    return save_note(summary, tags=["journal:auto"])
+
+
+def _filter_by_workspace(notes: list[dict], workspace: str | None) -> list[dict]:
+    """Keep only notes matching `workspace`. Notes without a workspace tag are
+    treated as global and always included."""
+    if workspace is None:
+        return notes
+    out = []
+    for n in notes:
+        nw = n.get("workspace")
+        if nw is None or nw == workspace:
+            out.append(n)
+    return out
+
+
+@tool()
+def recall_notes(query: str = "", top_k: int = 10, all_workspaces: bool = False) -> str:
+    """Semantic search saved notes. Defaults to scoping by the active workspace.
+
+    Set all_workspaces=True to ignore the workspace filter (search the whole
+    note pool, including notes from other projects).
+    """
+    workspace = None if all_workspaces else _active_workspace()
     if not query:
-        # Just list latest.
-        notes = []
-        for p in sorted(_notes_dir().glob("*.json"))[-top_k:]:
+        # Just list latest, filtered by workspace.
+        all_notes = []
+        for p in sorted(_notes_dir().glob("*.json")):
             try:
-                notes.append(json.loads(p.read_text(encoding="utf-8")))
+                all_notes.append(json.loads(p.read_text(encoding="utf-8")))
             except Exception:
                 continue
+        all_notes = _filter_by_workspace(all_notes, workspace)
+        notes = all_notes[-top_k:]
         return (
             "\n\n".join(
                 f"[{nt['timestamp']}] tags={nt['tags']}\n{nt['content']}" for nt in notes
@@ -96,9 +152,34 @@ def recall_notes(query: str = "", top_k: int = 10) -> str:
             continue
         if query.lower() in data["content"].lower():
             notes.append(data)
+    notes = _filter_by_workspace(notes, workspace)
     notes = notes[-top_k:]
     if not notes:
         return "(no notes match)"
     return "\n\n".join(
         f"[{nt['timestamp']}] tags={nt['tags']}\n{nt['content']}" for nt in notes
     )
+
+
+def load_recent_workspace_notes(workspace: str, limit: int = 5) -> str:
+    """Return a formatted block of the most-recent notes for `workspace`.
+
+    Used by the agent loop to inject prior-session context into the system
+    prompt at the start of a new session in this workspace. Returns an empty
+    string if no relevant notes exist.
+    """
+    notes = []
+    for p in sorted(_notes_dir().glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("workspace") == workspace:
+            notes.append(data)
+    notes = notes[-limit:]
+    if not notes:
+        return ""
+    body = "\n\n".join(
+        f"- [{nt['timestamp']}] {nt['content']}" for nt in notes
+    )
+    return f"<workspace_memory>\nRecent notes from this workspace ({workspace}):\n{body}\n</workspace_memory>"
