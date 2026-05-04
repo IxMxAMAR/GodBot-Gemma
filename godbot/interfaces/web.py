@@ -904,6 +904,91 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
     async def health():
         return {"status": "ok"}
 
+    @app.get("/api/stats")
+    async def stats():
+        """Aggregate metrics across all sessions on disk (sub-project 32).
+
+        Walks ``<sessions_root>/*/events.jsonl`` and tallies:
+
+        - session count and turn count
+        - tool-call frequency per tool name
+        - the top tool by call count
+        - cumulative token usage (summed from each session's meta)
+        - cumulative estimated cost (best-effort, via the pricing table)
+        - background task counts by terminal status
+
+        Read-only; safe to call frequently. The walk reads disk so it's
+        bounded by the session count — fine for typical deployments,
+        could be cached if a user accumulates 10k+ sessions.
+        """
+        from collections import Counter
+        from godbot.core.pricing import compute_cost
+        from godbot.core.tasks import DEFAULT_RUNNER
+
+        session_count = 0
+        turn_count = 0
+        tool_calls: Counter[str] = Counter()
+        total_input = 0
+        total_output = 0
+        total_usd = 0.0
+
+        if sessions_root.exists():
+            for sdir in sorted(sessions_root.iterdir()):
+                if not sdir.is_dir():
+                    continue
+                meta_p = sdir / "meta.json"
+                if not meta_p.exists():
+                    continue
+                session_count += 1
+                try:
+                    s = Session.load(sessions_root, sdir.name)
+                except Exception:
+                    continue
+                u = s.usage
+                turn_count += u["turns"]
+                total_input += u["input_tokens"]
+                total_output += u["output_tokens"]
+                # Per-session cost; ignore unmatched.
+                cost = compute_cost(
+                    provider=s.provider,
+                    model=s.model_name or s.model,
+                    input_tokens=u["input_tokens"],
+                    output_tokens=u["output_tokens"],
+                )
+                if cost.matched:
+                    total_usd += cost.usd
+                # Walk events for tool-call tally.
+                for ev in s._events():
+                    if ev.get("type") == "assistant_tool_call":
+                        name = ev.get("name") or "(unknown)"
+                        tool_calls[name] += 1
+
+        # Background tasks: just the in-memory records (persistence stores
+        # them on disk too, but DEFAULT_RUNNER reloads them on startup).
+        task_recs = DEFAULT_RUNNER.list_tasks()
+        task_status: Counter[str] = Counter(r.status for r in task_recs)
+
+        top_tools = [
+            {"name": name, "count": count}
+            for name, count in tool_calls.most_common(10)
+        ]
+        return {
+            "sessions": session_count,
+            "turns": turn_count,
+            "tool_calls_total": sum(tool_calls.values()),
+            "top_tools": top_tools,
+            "tasks": {
+                "total": len(task_recs),
+                "by_status": dict(task_status),
+            },
+            "usage": {
+                "input_tokens": total_input,
+                "output_tokens": total_output,
+                "total_tokens": total_input + total_output,
+            },
+            "estimated_cost_usd": round(total_usd, 6),
+        }
+
     @app.post("/api/sessions/new")
     async def session_new(request: Request):
         body = {}
