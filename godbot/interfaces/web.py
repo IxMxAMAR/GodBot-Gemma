@@ -273,6 +273,90 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
         session.set_tool_overrides(sorted(current))
         return {"ok": True, "tool_overrides": session.tool_overrides}
 
+    @app.get("/api/memory")
+    async def memory_list(workspace: Optional[str] = None, q: str = ""):
+        """List workspace-scoped notes (newest first).
+
+        ``workspace`` is the absolute path stored on each note record. When
+        omitted the endpoint returns every note in the global pool.
+        """
+        from godbot.tools.memory import list_notes
+        notes = list_notes(workspace=workspace, query=q)
+        return {"notes": notes}
+
+    @app.post("/api/memory/pin")
+    async def memory_pin(request: Request):
+        """Pin or unpin a note. Body: ``{timestamp, pin: bool}``.
+
+        Pinned notes always appear in ``load_recent_workspace_notes`` (capped
+        at 5) so the user can anchor important context across sessions.
+        """
+        body = await request.json()
+        ts = body.get("timestamp")
+        pin = bool(body.get("pin", True))
+        if not ts:
+            raise HTTPException(400, "timestamp required")
+        from godbot.tools.memory import set_pin
+        ok = set_pin(ts, pin)
+        if not ok:
+            raise HTTPException(404, "note not found")
+        return {"ok": True}
+
+    @app.post("/api/memory/delete")
+    async def memory_delete(request: Request):
+        """Delete a note. Body: ``{timestamp}``."""
+        body = await request.json()
+        ts = body.get("timestamp")
+        if not ts:
+            raise HTTPException(400, "timestamp required")
+        from godbot.tools.memory import delete_note
+        ok = delete_note(ts)
+        if not ok:
+            raise HTTPException(404, "note not found")
+        return {"ok": True}
+
+    @app.post("/api/memory/auto_summarize")
+    async def memory_auto_summarize(request: Request):
+        """Run ``project_summary`` for ``workspace`` and persist as a note.
+
+        Body: ``{workspace: <abs path>, force?: bool}``. When ``force`` is
+        false (default) and a recent ``project_summary`` note already exists
+        for this workspace, returns the cached one without re-running the
+        tool. The summary is saved with tag ``project_summary`` so
+        ``load_recent_workspace_notes`` can prefer it.
+        """
+        body = await request.json()
+        workspace = body.get("workspace")
+        force = bool(body.get("force", False))
+        if not workspace:
+            raise HTTPException(400, "workspace required")
+
+        from godbot.tools.memory import _notes_for_workspace, save_note
+        from godbot.tools.project import project_summary
+        from godbot.core.workspace import Workspace, set_workspace, _current as _ws_current
+
+        # Cached path: return the most-recent project_summary note unless caller forces refresh.
+        if not force:
+            existing = [
+                n for n in _notes_for_workspace(workspace)
+                if "project_summary" in (n.get("tags") or [])
+            ]
+            if existing:
+                return {"summary": existing[-1]["content"], "cached": True}
+
+        # Activate workspace contextvar so save_note tags correctly.
+        try:
+            ws = Workspace.of(workspace)
+        except (FileNotFoundError, NotADirectoryError) as e:
+            raise HTTPException(400, f"workspace invalid: {e}")
+        token = set_workspace(ws)
+        try:
+            text = project_summary(root=workspace)
+            save_note(text, tags=["project_summary"])
+        finally:
+            _ws_current.reset(token)
+        return {"summary": text, "cached": False}
+
     @app.get("/api/rag/collections")
     async def rag_collections():
         home = Path(os.environ.get("GODBOT_HOME", str(Path.home() / ".godbot")))
