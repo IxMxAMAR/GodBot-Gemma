@@ -228,6 +228,12 @@ async def run_turn(
                 )
                 turn = _legacy_react_turn(full_text)
 
+            # Accumulate token usage onto the session (sub-project 20).
+            # Legacy LLMClient turns have empty usage; provider turns carry
+            # the normalised {input_tokens, output_tokens, total_tokens}
+            # shape. add_usage no-ops on empty.
+            session.add_usage(turn.usage)
+
             # Branch on the protocol used for *this* turn.
             if protocol_pref == NATIVE_TOOLS:
                 if turn.tool_calls:

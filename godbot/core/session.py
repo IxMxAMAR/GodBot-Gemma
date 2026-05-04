@@ -206,6 +206,52 @@ class Session:
         self._meta["ended_at"] = datetime.now().isoformat(timespec="seconds")
         self._save_meta()
 
+    @property
+    def usage(self) -> dict[str, int]:
+        """Cumulative token usage for this session.
+
+        Keys: ``input_tokens``, ``output_tokens``, ``total_tokens``,
+        ``turns``. Always returns the full set, with zeros for missing
+        fields, so callers can render a consistent label even on a brand
+        new session.
+        """
+        u = self._meta.get("usage") or {}
+        return {
+            "input_tokens": int(u.get("input_tokens", 0)),
+            "output_tokens": int(u.get("output_tokens", 0)),
+            "total_tokens": int(u.get("total_tokens", 0)),
+            "turns": int(u.get("turns", 0)),
+        }
+
+    def add_usage(self, turn_usage: dict[str, int]) -> None:
+        """Accumulate one turn's usage onto the session total (sub-project 20).
+
+        Provider classes return a normalized ``{input_tokens,
+        output_tokens, total_tokens}`` dict on every TurnResult. We sum
+        these and bump a turn counter so the UI can show "10 turns,
+        45,000 tokens" without computing it every read.
+
+        No-op when ``turn_usage`` is empty (e.g. a legacy provider that
+        doesn't expose token counts), and never raises.
+        """
+        if not turn_usage:
+            return
+        try:
+            inp = int(turn_usage.get("input_tokens", 0))
+            out = int(turn_usage.get("output_tokens", 0))
+            total = int(turn_usage.get("total_tokens", 0))
+        except Exception:
+            return
+        if inp == 0 and out == 0 and total == 0:
+            return
+        cur = dict(self._meta.get("usage") or {})
+        cur["input_tokens"] = int(cur.get("input_tokens", 0)) + inp
+        cur["output_tokens"] = int(cur.get("output_tokens", 0)) + out
+        cur["total_tokens"] = int(cur.get("total_tokens", 0)) + total
+        cur["turns"] = int(cur.get("turns", 0)) + 1
+        self._meta["usage"] = cur
+        self._save_meta()
+
     def _save_meta(self) -> None:
         self._write_meta(self.dir, self._meta)
 

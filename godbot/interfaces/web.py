@@ -683,7 +683,23 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             "rag_collection": s.rag_collection,
             "workspace_root": s._meta.get("workspace_root"),
             "auto_approve_in_sandbox": bool(s._meta.get("auto_approve_in_sandbox", False)),
+            "usage": s.usage,
         }
+
+    @app.get("/api/sessions/{sid}/usage")
+    async def session_usage(sid: str):
+        """Cumulative token usage for one session (sub-project 20).
+
+        Always returns the normalized shape ``{input_tokens, output_tokens,
+        total_tokens, turns}`` regardless of which provider drove the
+        session. Zero everything for sessions that ran on legacy LLMClient
+        (no usage exposed).
+        """
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        return s.usage
 
     _register_endpoints(app, sessions_root)
 
