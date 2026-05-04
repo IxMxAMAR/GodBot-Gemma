@@ -382,6 +382,14 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
 
     _register_endpoints(app, sessions_root)
 
+    # OpenAI-compatible /v1/chat/completions shim (sub-project 8). Lets
+    # any OpenAI-SDK client (Cursor, Continue, Aider, LangChain, vanilla
+    # ``openai`` SDK) route through GodBot's agent loop without code
+    # changes. Mounted here so the static catch-all below doesn't
+    # shadow the route.
+    from godbot.interfaces.openai_shim import build_router as build_openai_router
+    app.include_router(build_openai_router(sessions_root))
+
     # Static frontend mounted in 9.5.
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
