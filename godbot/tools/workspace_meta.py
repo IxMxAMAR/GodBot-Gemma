@@ -616,6 +616,34 @@ def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
 
 
 @tool()
+def string_diff(a: str, b: str, max_lines: int = 200) -> str:
+    """Show a unified diff between two inline strings (sub-project 71).
+
+    Output is standard ``difflib.unified_diff`` format with up to
+    ``max_lines`` of diff lines (capped to keep responses bounded).
+    Returns ``"identical"`` when the inputs are byte-equal.
+
+    Pairs with ``compare_files`` (which does files): use string_diff
+    when you have two text variables already in memory and want to
+    see how they differ.
+    """
+    import difflib as _difflib
+
+    if not isinstance(a, str) or not isinstance(b, str):
+        return "[error] both a and b must be strings"
+    if a == b:
+        return "identical"
+    a_lines = a.splitlines(keepends=False)
+    b_lines = b.splitlines(keepends=False)
+    diff = list(_difflib.unified_diff(a_lines, b_lines, fromfile="a", tofile="b", lineterm=""))
+    cap = max(1, min(int(max_lines), 5000))
+    if len(diff) > cap:
+        diff = diff[:cap]
+        diff.append(f"... [truncated at {cap} lines]")
+    return "\n".join(diff)
+
+
+@tool()
 def regex_search(pattern: str, text: str, max_matches: int = 20, ignore_case: bool = False) -> str:
     """Find regex matches in inline text (sub-project 70).
 
