@@ -1417,6 +1417,27 @@ def hash_file(path: str, algorithm: str = "sha256") -> str:
     return f"{algo}: {h.hexdigest()}  ({p}, {size} bytes)"
 
 
+@tool(timeout=70)
+def sleep(seconds: float = 1.0) -> str:
+    """Pause for ``seconds`` seconds (sub-project 91).
+
+    Bounded at [0.0, 60.0]. Useful when the agent needs to pace itself
+    while waiting for an external state to settle (e.g. file write to
+    flush, a background task to make progress) without busy-looping.
+    Returns ``"slept N.NNs"``.
+
+    Non-dangerous; pure time delay. The 60-second cap prevents the
+    agent from pinning a turn for an unbounded interval.
+    """
+    import time as _time
+    try:
+        s = max(0.0, min(float(seconds), 60.0))
+    except (TypeError, ValueError):
+        return "[error] seconds must be a number"
+    _time.sleep(s)
+    return f"slept {s:.2f}s"
+
+
 @tool()
 def now_iso(tz: str = "local") -> str:
     """Return the current time as an ISO-8601 string (sub-project 67).
