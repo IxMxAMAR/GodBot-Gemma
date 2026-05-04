@@ -615,6 +615,68 @@ def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
     return "\n".join(diff_lines)
 
 
+@tool()
+def file_info(path: str) -> str:
+    """Report a file's metadata (sub-project 69).
+
+    Output:
+      path: <absolute>
+      size: <N> bytes
+      type: file | directory | symlink | other
+      modified: <ISO-8601 mtime>
+      mime: <guessed Content-Type>
+
+    Workspace-confined. Cheaper than read_file when you only need
+    "is this big?" / "when was it last touched?" / "what kind of file
+    is this?" reconnaissance.
+    """
+    import mimetypes
+    from datetime import datetime
+    from pathlib import Path as _Path
+
+    if not path:
+        return "[error] path required"
+    ws = current_workspace()
+    p = _Path(path)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    try:
+        st = p.stat()
+    except FileNotFoundError:
+        return f"[error] not found: {p}"
+    except OSError as e:
+        return f"[error] stat failed: {type(e).__name__}: {e}"
+
+    if p.is_symlink():
+        kind = "symlink"
+    elif p.is_dir():
+        kind = "directory"
+    elif p.is_file():
+        kind = "file"
+    else:
+        kind = "other"
+    mime, _ = mimetypes.guess_type(str(p))
+    mtime = datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")
+    parts = [
+        f"path: {p}",
+        f"size: {st.st_size} bytes",
+        f"type: {kind}",
+        f"modified: {mtime}",
+    ]
+    if mime:
+        parts.append(f"mime: {mime}")
+    return "\n".join(parts)
+
+
 _HASH_ALGOS = {"sha256", "sha1", "md5", "sha512", "blake2b"}
 
 
