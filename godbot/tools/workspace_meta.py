@@ -183,6 +183,80 @@ def check_python_syntax(path: str = "", code: str = "") -> str:
 
 
 @tool()
+def list_functions(path: str) -> str:
+    """List every top-level + class-method definition in a Python file (sub-project 54).
+
+    Output format, one entry per line:
+
+      <line>: <kind> <qualified_name>(<sig>)
+
+    where ``kind`` is ``def`` / ``async def`` / ``class``. Methods are
+    qualified with their containing class (``Foo.bar``). Useful for
+    "what's in this file?" reconnaissance before extract_function or
+    targeted edits. Workspace-confined; .py files only.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    if not path:
+        return "[error] path required"
+    ws = current_workspace()
+    p = _Path(path)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    if not p.is_file():
+        return f"[error] not a file: {p}"
+    if p.suffix != ".py":
+        return f"[error] not a Python file: {p}"
+    try:
+        source = p.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return f"[error] read failed: {type(e).__name__}: {e}"
+    try:
+        tree = ast.parse(source, filename=str(p))
+    except SyntaxError as e:
+        return f"[error] syntax: line {e.lineno} col {e.offset}: {e.msg}"
+
+    entries: list[tuple[int, str]] = []
+
+    def _sig_for(node) -> str:
+        try:
+            return f"({ast.unparse(node.args)})"
+        except Exception:
+            return "(...)"
+
+    def visit(node, qual: str = ""):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            kind = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+            name = f"{qual}.{node.name}" if qual else node.name
+            entries.append((node.lineno, f"{kind} {name}{_sig_for(node)}"))
+        elif isinstance(node, ast.ClassDef):
+            entries.append((node.lineno, f"class {qual + '.' if qual else ''}{node.name}"))
+            for child in node.body:
+                visit(child, qual=node.name if not qual else f"{qual}.{node.name}")
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child, qual=qual)
+
+    visit(tree)
+    entries.sort(key=lambda e: e[0])
+    if not entries:
+        return f"{p}: (no top-level definitions)"
+    out = [f"file: {p}"]
+    out.extend(f"  L{lineno}: {desc}" for lineno, desc in entries)
+    return "\n".join(out)
+
+
+@tool()
 def extract_function(path: str, name: str) -> str:
     """Extract a Python function or class definition by name (sub-project 48).
 
