@@ -356,6 +356,49 @@ class Session:
     def append_meta_event(self, kind: str, payload: dict[str, Any]) -> None:
         self._append_event({"type": kind, **payload})
 
+    def append_feedback(
+        self, target_event_index: int, rating: str, comment: Optional[str] = None,
+    ) -> None:
+        """Record a per-turn feedback event (sub-project 35).
+
+        ``target_event_index`` is the 0-based index of the assistant or
+        tool event being rated; ``rating`` is one of ``up`` / ``down``.
+        ``comment`` is an optional free-text note. Multiple feedbacks
+        per index are allowed (the latest wins for UI purposes; full
+        history is preserved in events.jsonl).
+        """
+        if rating not in {"up", "down"}:
+            raise ValueError(f"rating must be 'up' or 'down', got {rating!r}")
+        payload: dict[str, Any] = {
+            "type": "feedback",
+            "target_index": int(target_event_index),
+            "rating": rating,
+        }
+        if comment:
+            payload["comment"] = str(comment)[:1000]
+        self._append_event(payload)
+
+    def feedback_summary(self) -> dict[str, Any]:
+        """Aggregate the session's feedback events into ``{up, down, latest_by_index}``."""
+        up = 0
+        down = 0
+        latest_by_index: dict[int, dict[str, Any]] = {}
+        for ev in self._events():
+            if ev.get("type") != "feedback":
+                continue
+            r = ev.get("rating")
+            if r == "up":
+                up += 1
+            elif r == "down":
+                down += 1
+            idx = ev.get("target_index")
+            if isinstance(idx, int):
+                latest_by_index[idx] = {
+                    "rating": r,
+                    "comment": ev.get("comment", ""),
+                }
+        return {"up": up, "down": down, "latest_by_index": latest_by_index}
+
     def _events(self) -> Iterable[dict[str, Any]]:
         path = self.dir / "events.jsonl"
         if not path.exists():

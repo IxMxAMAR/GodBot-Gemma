@@ -1031,6 +1031,51 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
                 continue
         return out
 
+    @app.post("/api/sessions/{sid}/feedback")
+    async def session_post_feedback(sid: str, request: Request):
+        """Record thumbs-up/thumbs-down on a turn (sub-project 35).
+
+        Body: ``{target_index: int, rating: "up"|"down", comment?: str}``.
+        Multiple feedbacks per index are allowed; the latest is what the
+        UI surfaces. Useful for offline analysis of which turns the user
+        approved.
+        """
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        try:
+            target_index = int(body["target_index"])
+        except (KeyError, ValueError, TypeError):
+            raise HTTPException(400, "target_index (int) required")
+        rating = body.get("rating")
+        if rating not in {"up", "down"}:
+            raise HTTPException(400, "rating must be 'up' or 'down'")
+        comment = body.get("comment")
+        if comment is not None and not isinstance(comment, str):
+            raise HTTPException(400, "comment must be a string")
+        try:
+            s.append_feedback(target_index, rating, comment=comment)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+    @app.get("/api/sessions/{sid}/feedback")
+    async def session_get_feedback(sid: str):
+        """Return aggregate feedback for one session: ``{up, down, latest_by_index}``."""
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        return s.feedback_summary()
+
     @app.delete("/api/sessions/{sid}")
     async def session_delete(sid: str):
         """Permanently delete a session (sub-project 34).
