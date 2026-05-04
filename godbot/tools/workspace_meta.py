@@ -616,6 +616,89 @@ def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
 
 
 @tool()
+def now_iso(tz: str = "local") -> str:
+    """Return the current time as an ISO-8601 string (sub-project 67).
+
+    ``tz`` is either ``"local"`` (default) or ``"utc"``. Output format
+    is seconds-resolution. Useful for stamping log entries, generating
+    filenames, or pinning "what time was it when I called this tool?"
+    reasoning.
+    """
+    from datetime import datetime, timezone
+    if tz.lower() == "utc":
+        return datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+    return datetime.now().isoformat(timespec="seconds")
+
+
+@tool()
+def parse_iso(text: str) -> str:
+    """Parse an ISO-8601 timestamp and report a structured breakdown
+    (sub-project 67).
+
+    Output:
+      year=YYYY month=MM day=DD weekday=Name hour=HH minute=MM second=SS
+      epoch=<unix seconds>
+
+    Returns ``[error] ...`` on parse failure. Accepts ``2026-05-05``,
+    ``2026-05-05T12:34:56``, ``2026-05-05T12:34:56+00:00``, ``...Z``.
+    """
+    from datetime import datetime
+    if not isinstance(text, str) or not text:
+        return "[error] text required"
+    try:
+        normalized = text.replace("Z", "+00:00") if text.endswith("Z") else text
+        dt = datetime.fromisoformat(normalized)
+    except ValueError as e:
+        return f"[error] parse: {e}"
+    weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                "Friday", "Saturday", "Sunday"]
+    weekday = weekdays[dt.weekday()]
+    epoch = int(dt.timestamp()) if dt.tzinfo else int(dt.replace(microsecond=0).timestamp())
+    return (
+        f"year={dt.year} month={dt.month:02d} day={dt.day:02d} "
+        f"weekday={weekday} hour={dt.hour:02d} minute={dt.minute:02d} "
+        f"second={dt.second:02d}\nepoch={epoch}"
+    )
+
+
+@tool()
+def time_ago(text: str) -> str:
+    """Report how long ago an ISO-8601 timestamp was, in human terms
+    (sub-project 67).
+
+    Output examples: ``"42 seconds ago"``, ``"3 minutes ago"``,
+    ``"in 5 hours"`` (future timestamps render as "in"). Granularity:
+    seconds → minutes → hours → days. Useful for the agent reasoning
+    about how stale data is.
+    """
+    from datetime import datetime, timezone
+    if not isinstance(text, str) or not text:
+        return "[error] text required"
+    try:
+        normalized = text.replace("Z", "+00:00") if text.endswith("Z") else text
+        dt = datetime.fromisoformat(normalized)
+    except ValueError as e:
+        return f"[error] parse: {e}"
+    if dt.tzinfo is None:
+        dt = dt.astimezone()
+    now = datetime.now(tz=timezone.utc)
+    delta = now - dt.astimezone(timezone.utc)
+    total = delta.total_seconds()
+    future = total < 0
+    total = abs(total)
+    if total < 60:
+        amount, unit = int(total), "second"
+    elif total < 3600:
+        amount, unit = int(total // 60), "minute"
+    elif total < 86400:
+        amount, unit = int(total // 3600), "hour"
+    else:
+        amount, unit = int(total // 86400), "day"
+    plural = "" if amount == 1 else "s"
+    return f"in {amount} {unit}{plural}" if future else f"{amount} {unit}{plural} ago"
+
+
+@tool()
 def text_metrics(text: str = "", path: str = "") -> str:
     """Quick text statistics for inline text or a workspace file (sub-project 65).
 
