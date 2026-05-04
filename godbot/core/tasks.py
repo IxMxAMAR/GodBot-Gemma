@@ -1,4 +1,4 @@
-"""Background agent tasks (sub-project 13).
+"""Background agent tasks (sub-project 13 + 17 persistence).
 
 A "background task" is a goal the user hands off to the agent to work on
 without supervision. The runner spins up a Session, runs the agent loop
@@ -17,8 +17,11 @@ Design:
   underlying session id. Sessions are still recorded under
   ``<sessions_root>`` so the user can inspect the trace.
 - Statuses: ``pending`` → ``running`` → (``done`` | ``error`` | ``cancelled``).
-- The runner is process-local — restart the daemon and pending tasks
-  are gone. Persistence is out of scope for v1.
+- **Persistent**: every state change writes the record to disk under
+  ``<sessions_root>/.godbot-tasks/<tid>.json``. On daemon startup the
+  runner reloads them and marks any non-terminal task as ``interrupted``
+  (a terminal status that signals "restart killed me"). This lets the UI
+  show prior results even after a daemon restart.
 
 The web-layer wires this up in :mod:`godbot.interfaces.web`.
 """
@@ -26,6 +29,7 @@ The web-layer wires this up in :mod:`godbot.interfaces.web`.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -71,13 +75,60 @@ def _new_task_id() -> str:
     return "t-" + uuid.uuid4().hex[:8]
 
 
-class TaskRunner:
-    """Process-local registry of background agent tasks."""
+_TERMINAL = {"done", "error", "cancelled", "interrupted"}
 
-    def __init__(self) -> None:
+
+class TaskRunner:
+    """Process-local registry of background agent tasks (with optional disk persistence)."""
+
+    def __init__(self, persist_dir: Optional[Path] = None) -> None:
         self._records: dict[str, TaskRecord] = {}
         self._cancels: dict[str, asyncio.Event] = {}
         self._asyncio_tasks: dict[str, asyncio.Task] = {}
+        self._persist_dir = persist_dir
+
+    # --- persistence --------------------------------------------------
+
+    def attach_persistence(self, persist_dir: Path) -> int:
+        """Enable disk persistence and load any existing records.
+
+        Returns the count of records loaded. Non-terminal records are
+        flipped to ``interrupted`` (terminal) so the UI can distinguish
+        them from a fresh task. Subsequent state changes write through
+        to ``persist_dir/<tid>.json``.
+        """
+        self._persist_dir = Path(persist_dir)
+        self._persist_dir.mkdir(parents=True, exist_ok=True)
+        loaded = 0
+        for p in sorted(self._persist_dir.glob("t-*.json")):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            try:
+                rec = TaskRecord(**data)
+            except TypeError:
+                # Schema drift — skip rather than crash startup.
+                continue
+            if rec.status not in _TERMINAL:
+                rec.status = "interrupted"
+                rec.error = rec.error or "daemon restart killed this task"
+                rec.ended_at = rec.ended_at or time.time()
+            self._records[rec.id] = rec
+            loaded += 1
+        # Persist the flipped records back so the next startup is consistent.
+        for rec in self._records.values():
+            self._persist(rec)
+        return loaded
+
+    def _persist(self, rec: TaskRecord) -> None:
+        if self._persist_dir is None:
+            return
+        try:
+            p = self._persist_dir / f"{rec.id}.json"
+            p.write_text(json.dumps(rec.to_dict(), indent=2), encoding="utf-8")
+        except Exception:
+            log.exception("failed to persist task %s", rec.id)
 
     # --- public API ---------------------------------------------------
 
@@ -125,6 +176,7 @@ class TaskRunner:
             model=model_name,
         )
         self._records[tid] = rec
+        self._persist(rec)
         cancel = asyncio.Event()
         self._cancels[tid] = cancel
 
@@ -138,6 +190,7 @@ class TaskRunner:
 
         async def _runner() -> None:
             rec.status = "running"
+            self._persist(rec)
             try:
                 session = Session.create(
                     sessions_root,
@@ -219,6 +272,7 @@ class TaskRunner:
                 rec.ended_at = time.time()
                 self._cancels.pop(tid, None)
                 self._asyncio_tasks.pop(tid, None)
+                self._persist(rec)
 
         t = asyncio.get_running_loop().create_task(_runner(), name=f"task-{tid}")
         self._asyncio_tasks[tid] = t
@@ -245,11 +299,21 @@ class TaskRunner:
         return True
 
     def clear_finished(self) -> int:
-        """Remove records in a terminal state. Returns count removed."""
-        terminal = {"done", "error", "cancelled"}
-        kill = [tid for tid, r in self._records.items() if r.status in terminal]
+        """Remove records in a terminal state. Returns count removed.
+
+        Persisted records are deleted from disk too so the next startup
+        doesn't reload them.
+        """
+        kill = [tid for tid, r in self._records.items() if r.status in _TERMINAL]
         for tid in kill:
             self._records.pop(tid, None)
+            if self._persist_dir is not None:
+                try:
+                    (self._persist_dir / f"{tid}.json").unlink()
+                except FileNotFoundError:
+                    pass
+                except Exception:
+                    log.exception("failed to delete persisted task %s", tid)
         return len(kill)
 
 

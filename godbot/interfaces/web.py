@@ -568,6 +568,18 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
     sessions_root = Path(sessions_root or (Path.cwd() / "sessions"))
     sessions_root.mkdir(parents=True, exist_ok=True)
 
+    # Wire persistent task storage so background tasks survive daemon
+    # restart. Non-terminal tasks at load time are flipped to
+    # `interrupted` so the UI can show them as "killed by restart".
+    try:
+        from godbot.core.tasks import DEFAULT_RUNNER
+        DEFAULT_RUNNER.attach_persistence(sessions_root / ".godbot-tasks")
+    except Exception:
+        # Persistence is best-effort: a corrupt directory should not stop
+        # the daemon from booting.
+        import logging as _logging
+        _logging.getLogger("godbot.tasks").exception("attach_persistence failed; continuing without it")
+
     app = FastAPI(title="GodBot")
 
     # Allow browser surfaces (Tauri WebView, browser-based UIs) to call us.
