@@ -1795,6 +1795,46 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             "events_imported": kept,
         }
 
+    @app.get("/api/sessions/{sid}/replay")
+    async def session_replay(sid: str, delay_ms: int = 0):
+        """Replay a past session's events as SSE (sub-project 58).
+
+        Reads ``events.jsonl`` and re-emits each entry as an SSE event
+        whose name is the event ``type`` and whose data is the full
+        JSON record. ``delay_ms`` (0..2000) optionally throttles between
+        events for animated UI playback. A final ``replay_done`` event
+        signals the end of the stream.
+
+        Read-only; doesn't touch the live agent runner. Useful for
+        timeline UIs ("re-watch this turn step by step") and debug
+        tools that want to scrub through a past session.
+        """
+        from sse_starlette.sse import EventSourceResponse
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        delay = max(0, min(int(delay_ms), 2000))
+
+        async def gen():
+            seq = 0
+            for ev in s._events():
+                seq += 1
+                ev_type = ev.get("type", "unknown")
+                yield {
+                    "id": str(seq),
+                    "event": ev_type,
+                    "data": json.dumps(ev),
+                }
+                if delay > 0:
+                    await asyncio.sleep(delay / 1000.0)
+            yield {
+                "event": "replay_done",
+                "data": json.dumps({"events_replayed": seq}),
+            }
+
+        return EventSourceResponse(gen())
+
     @app.get("/api/sessions/{sid}/export")
     async def session_export(sid: str, format: str = "json"):
         """Export a full session as a self-contained record (sub-project 31).
