@@ -668,6 +668,46 @@ def urlunquote(text: str) -> str:
 
 
 @tool()
+def b64encode(text: str, urlsafe: bool = False) -> str:
+    """Base64-encode UTF-8 text (sub-project 63).
+
+    ``urlsafe=True`` uses the URL-safe alphabet (``-`` / ``_`` instead
+    of ``+`` / ``/``) and strips padding ``=`` so the result is safe
+    in query strings or filenames. Standard base64 keeps padding.
+    """
+    import base64 as _b64
+    if not isinstance(text, str):
+        return "[error] text must be a string"
+    raw = text.encode("utf-8")
+    if urlsafe:
+        return _b64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+    return _b64.b64encode(raw).decode("ascii")
+
+
+@tool()
+def b64decode(text: str, urlsafe: bool = False) -> str:
+    """Decode a base64-encoded string back to UTF-8 (sub-project 63).
+
+    ``urlsafe=True`` accepts URL-safe alphabet input AND auto-pads any
+    missing ``=`` so the round-trip with ``b64encode(urlsafe=True)``
+    just works. Standard base64 expects properly-padded input.
+    """
+    import base64 as _b64
+    if not isinstance(text, str):
+        return "[error] text must be a string"
+    try:
+        if urlsafe:
+            # Auto-pad to a multiple of 4.
+            pad = (-len(text)) % 4
+            return _b64.urlsafe_b64decode(text + "=" * pad).decode(
+                "utf-8", errors="replace"
+            )
+        return _b64.b64decode(text, validate=False).decode("utf-8", errors="replace")
+    except Exception as e:
+        return f"[error] decode failed: {type(e).__name__}: {e}"
+
+
+@tool()
 def format_json(text: str, indent: int = 2, sort_keys: bool = False) -> str:
     """Pretty-print a JSON blob (sub-project 60).
 
