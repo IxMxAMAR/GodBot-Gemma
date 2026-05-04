@@ -616,6 +616,46 @@ def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
 
 
 @tool()
+def parse_url(url: str) -> str:
+    """Parse a URL into structured components (sub-project 74).
+
+    Output:
+
+      scheme: <https / http / ftp / ...>
+      host: <netloc without port>
+      port: <int or 'default'>
+      path: <decoded path>
+      query: <raw query string>
+      params (N): one ``  key=value`` row per query param
+      fragment: <decoded fragment>
+
+    Returns ``[error] ...`` on parse failure or empty url.
+    """
+    from urllib.parse import urlparse, parse_qsl
+
+    if not isinstance(url, str) or not url.strip():
+        return "[error] url required"
+    try:
+        parsed = urlparse(url)
+    except Exception as e:
+        return f"[error] parse failed: {type(e).__name__}: {e}"
+    parts = [
+        f"scheme: {parsed.scheme or '(none)'}",
+        f"host: {parsed.hostname or '(none)'}",
+        f"port: {parsed.port if parsed.port else 'default'}",
+        f"path: {parsed.path or '/'}",
+        f"query: {parsed.query or '(empty)'}",
+    ]
+    pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    if pairs:
+        parts.append(f"params ({len(pairs)}):")
+        parts.extend(f"  {k}={v}" for k, v in pairs)
+    if parsed.fragment:
+        parts.append(f"fragment: {parsed.fragment}")
+    return "\n".join(parts)
+
+
+@tool()
 def string_diff(a: str, b: str, max_lines: int = 200) -> str:
     """Show a unified diff between two inline strings (sub-project 71).
 
