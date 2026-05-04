@@ -992,6 +992,108 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
     async def health():
         return {"status": "ok"}
 
+    @app.post("/api/agent/raw_completion/stream")
+    async def agent_raw_completion_stream(request: Request):
+        """Streaming version of POST /api/agent/raw_completion (sub-project 89).
+
+        Same body shape; emits SSE:
+          event: chunk  data: {"text": "..."}
+          event: chunk  data: {"text": "..."}
+          event: done   data: {"model": "..."}
+          event: error  data: {"message": "..."}
+
+        Useful when the caller wants tokens to render incrementally
+        (Studio "raw prompt playground", CLI tools, etc.). Same
+        provider-resolution + Anthropic/Gemini 501 behavior as the
+        non-streaming endpoint.
+        """
+        from sse_starlette.sse import EventSourceResponse
+        from godbot.core.completion import _is_openai_compatible
+        import httpx as _httpx
+
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        messages = body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise HTTPException(400, "messages (non-empty list) required")
+        for m in messages:
+            if not isinstance(m, dict) or "role" not in m or "content" not in m:
+                raise HTTPException(400, "each message needs role + content")
+
+        cfg = load_config()
+        provider_name = body.get("provider") or cfg.providers.default or "lmstudio"
+        item = cfg.providers.items.get(provider_name)
+        if item is None:
+            raise HTTPException(400, f"provider {provider_name!r} not configured")
+        if not _is_openai_compatible(provider_name):
+            raise HTTPException(
+                501, f"provider {provider_name!r} not yet supported for raw_completion stream",
+            )
+
+        model = body.get("model") or item.default_model or "auto"
+        if model == "auto":
+            try:
+                pcfg = ProviderConfigType(
+                    name=provider_name, base_url=item.base_url,
+                    api_key=item.api_key
+                    or (item.api_key_env and os.environ.get(item.api_key_env, "") or ""),
+                    default_model=item.default_model,
+                )
+                provider_inst = get_provider_factory(provider_name, pcfg)
+                resolved = await provider_inst.select_model("auto")
+                model = resolved.id
+            except Exception as e:
+                raise HTTPException(503, f"could not resolve model: {e}")
+
+        api_key = item.api_key
+        if not api_key and item.api_key_env:
+            api_key = os.environ.get(item.api_key_env, "")
+        try:
+            temperature = float(body.get("temperature", 0.7))
+            max_tokens = int(body.get("max_tokens", 2048))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "temperature must be a float, max_tokens an int")
+
+        url = f"{item.base_url.rstrip('/')}/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key or 'lm-studio'}"}
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+
+        async def gen():
+            try:
+                async with _httpx.AsyncClient(timeout=60.0) as client:
+                    async with client.stream("POST", url, headers=headers, json=payload) as r:
+                        r.raise_for_status()
+                        async for line in r.aiter_lines():
+                            if not line or not line.startswith("data:"):
+                                continue
+                            data_part = line[5:].strip()
+                            if data_part == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_part)
+                            except json.JSONDecodeError:
+                                continue
+                            choices = chunk.get("choices") or []
+                            if not choices:
+                                continue
+                            delta = choices[0].get("delta") or {}
+                            text_chunk = delta.get("content")
+                            if text_chunk:
+                                yield {"event": "chunk", "data": json.dumps({"text": text_chunk})}
+            except Exception as e:
+                yield {"event": "error", "data": json.dumps({"message": f"{type(e).__name__}: {e}"})}
+                return
+            yield {"event": "done", "data": json.dumps({"model": model})}
+
+        return EventSourceResponse(gen())
+
     @app.post("/api/agent/raw_completion")
     async def agent_raw_completion(request: Request):
         """Direct LLM passthrough — no agent loop, no ReAct framing
