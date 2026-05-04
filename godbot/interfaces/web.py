@@ -1072,6 +1072,76 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
                 continue
         return out
 
+    @app.post("/api/sessions/{sid}/fork")
+    async def session_fork(sid: str, request: Request):
+        """Branch a session into a new one, preserving history up to an index.
+
+        Body: ``{up_to_index?: int}``. When omitted, the fork copies the
+        full event history; otherwise only events at indices < up_to_index
+        are carried into the new session. The forked session inherits
+        provider/model/workspace from the source.
+
+        Useful for "what if I had said something different at turn 5?"
+        without losing the original transcript. The new session starts
+        fresh otherwise (no usage carried over, no budget). Returns
+        the new session id.
+        """
+        try:
+            src = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        if not isinstance(body, dict):
+            body = {}
+        events = list(src._events())
+        up_to_index = body.get("up_to_index")
+        if up_to_index is not None:
+            try:
+                up_to_index = int(up_to_index)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "up_to_index must be an int")
+            if up_to_index < 0 or up_to_index > len(events):
+                raise HTTPException(400, f"up_to_index out of range (0..{len(events)})")
+            events = events[:up_to_index]
+
+        new_session = Session.create(
+            sessions_root,
+            model=src.model,
+            workspace_root=src._meta.get("workspace_root"),
+            auto_approve_in_sandbox=bool(src._meta.get("auto_approve_in_sandbox", False)),
+            provider=src.provider,
+            model_name=src.model_name,
+            protocol=src.protocol,
+        )
+        # Copy events.jsonl prefix verbatim. We bypass append_user / etc. so
+        # tool_call ↔ tool_result pairs stay correlated.
+        if events:
+            target_events = new_session.dir / "events.jsonl"
+            with open(target_events, "a", encoding="utf-8") as f:
+                for ev in events:
+                    f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+        # Copy any blobs referenced by the carried tool_results.
+        import shutil as _shutil
+        for ev in events:
+            if ev.get("type") == "tool_result" and ev.get("blob"):
+                blob_id = ev["blob"]
+                src_blob = src.dir / "blobs" / f"{blob_id}.txt"
+                if src_blob.exists():
+                    dst_blob = new_session.dir / "blobs" / f"{blob_id}.txt"
+                    try:
+                        _shutil.copy2(src_blob, dst_blob)
+                    except OSError:
+                        pass  # best-effort; truncated content still in the LLM view
+        return {
+            "session_id": new_session.id,
+            "forked_from": sid,
+            "events_copied": len(events),
+        }
+
     @app.post("/api/sessions/{sid}/feedback")
     async def session_post_feedback(sid: str, request: Request):
         """Record thumbs-up/thumbs-down on a turn (sub-project 35).
