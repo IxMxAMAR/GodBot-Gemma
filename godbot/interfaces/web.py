@@ -18,6 +18,14 @@ from godbot.core.session import Session
 from godbot.prompts import build_system_prompt
 import godbot.tools  # noqa: F401 — triggers @tool auto-discovery so /api/tools is populated
 
+# Bring up MCP servers configured in ~/.godbot/config.toml. Best-effort:
+# unreachable servers are logged and skipped, so this never breaks startup
+# even with a malformed [mcp.servers.*] block. Runs at module-import time
+# (same pattern as godbot.tools auto-discovery above) so the daemon, CLI
+# and TUI all surface MCP tools the moment they import this module.
+from godbot.mcp import boot_mcp as _boot_mcp  # noqa: E402
+_boot_mcp()
+
 
 # Shared per-process state.
 _streams: dict[str, asyncio.Queue] = {}

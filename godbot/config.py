@@ -53,6 +53,28 @@ class DiscordConfig:
 
 
 @dataclass
+class MCPServerConfigItem:
+    """One MCP server entry from ``[mcp.servers.<name>]`` in config.toml.
+
+    Stdio transport only in v1: ``command`` is the executable, ``args`` is
+    the arg vector, ``env`` is merged on top of the parent process env when
+    spawning. An empty ``command`` means "skip this server".
+    """
+
+    command: str = ""
+    args: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class MCPConfig:
+    """Parsed ``[mcp]`` section. ``servers`` keys are user-chosen names and
+    become the tool-namespace prefix (``mcp_<name>_<tool>``)."""
+
+    servers: dict[str, MCPServerConfigItem] = field(default_factory=dict)
+
+
+@dataclass
 class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
@@ -60,6 +82,7 @@ class Config:
     rag: RAGConfig = field(default_factory=RAGConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     discord: DiscordConfig = field(default_factory=DiscordConfig)
+    mcp: MCPConfig = field(default_factory=MCPConfig)
 
 
 def godbot_home() -> Path:
@@ -101,6 +124,31 @@ def _filter_known(raw: dict, cls) -> dict:
     return {k: v for k, v in raw.items() if k in known}
 
 
+def _parse_mcp(raw_mcp: dict) -> MCPConfig:
+    """Parse ``[mcp]`` from TOML.
+
+    The ``servers`` field is a *dict of dataclasses keyed by user-chosen name*,
+    which ``_filter_known`` can't handle (it's not a fixed-shape dataclass).
+    We walk the sub-table by hand, skipping entries that aren't dict-shaped
+    or contain unknown keys (rather than crashing the whole config load).
+    """
+    servers_raw = (raw_mcp or {}).get("servers", {})
+    if not isinstance(servers_raw, dict):
+        return MCPConfig()
+    parsed: dict[str, MCPServerConfigItem] = {}
+    for name, entry in servers_raw.items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            parsed[name] = MCPServerConfigItem(
+                **_filter_known(entry, MCPServerConfigItem)
+            )
+        except Exception:
+            # Malformed entry — skip rather than tank the whole config load.
+            continue
+    return MCPConfig(servers=parsed)
+
+
 def load_config() -> Config:
     home = godbot_home()
     home.mkdir(parents=True, exist_ok=True)
@@ -115,4 +163,5 @@ def load_config() -> Config:
         rag=RAGConfig(**_filter_known(raw.get("rag") or {}, RAGConfig)),
         ui=UIConfig(**_filter_known(raw.get("ui") or {}, UIConfig)),
         discord=DiscordConfig(**_filter_known(raw.get("discord") or {}, DiscordConfig)),
+        mcp=_parse_mcp(raw.get("mcp") or {}),
     )

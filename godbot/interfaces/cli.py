@@ -127,6 +127,8 @@ async def run_repl(*, model: str = "auto", resume: Optional[str] = None, yolo: b
     from godbot.core.agent import run_turn
     from godbot.prompts import build_system_prompt
     import godbot.tools  # discovery
+    from godbot.mcp import boot_mcp as _boot_mcp
+    _boot_mcp()
     import os
     from pathlib import Path
 
