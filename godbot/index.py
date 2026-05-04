@@ -86,10 +86,68 @@ def _lock_path(coll_dir: Path) -> Path:
     return coll_dir / ".lock"
 
 
+def _chunks_for(path: Path):
+    """Return the chunk list for ``path`` using extension-aware chunking."""
+    from godbot.core.rag import chunk_text, chunk_markdown
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return []
+    return chunk_markdown(text) if path.suffix == ".md" else chunk_text(text)
+
+
+def _embed_and_upsert(path: Path, root: Path, store, emb) -> int:
+    """Embed every chunk of ``path`` and upsert into ``store``.
+
+    Used by both the full ``build_index`` walk and the incremental
+    ``update_file`` path. Path ids are scoped by absolute path + line
+    range so re-embedding the same file overwrites the prior entries
+    cleanly via chroma's upsert semantics.
+    """
+    chunks = _chunks_for(path)
+    if not chunks:
+        return 0
+    ids = [f"{path}:{c['start_line']}-{c['end_line']}" for c in chunks]
+    docs = [c["content"] for c in chunks]
+    metas = [
+        {
+            "path": str(path.relative_to(root)) if root in path.parents or path == root else str(path),
+            "lines": f"{c['start_line']}-{c['end_line']}",
+        }
+        for c in chunks
+    ]
+    embs = emb.embed(docs)
+    store.add(ids=ids, embeddings=embs, documents=docs, metadatas=metas)
+    return len(chunks)
+
+
+def update_file(
+    file_path: Path,
+    *,
+    collection: str,
+    workspace_root: Path,
+) -> int:
+    """Re-embed a single file's chunks into ``collection``.
+
+    Used by the ``update_workspace_index`` tool — lets the agent keep
+    its own search index fresh after editing without paying for a full
+    workspace rewalk. Returns the chunk count written.
+    """
+    from godbot.core.rag import Embedder, RagStore
+
+    home = Path(os.environ.get("GODBOT_HOME", str(Path.home() / ".godbot")))
+    if not file_path.is_file():
+        raise FileNotFoundError(file_path)
+    emb = Embedder.create(prefer="lmstudio")
+    store = RagStore(root=home / "rag", collection=collection)
+    return _embed_and_upsert(file_path, workspace_root, store, emb)
+
+
 def build_index(
     root: Path, collection: str, reindex: bool = False, force: bool = False
 ) -> int:
-    from godbot.core.rag import Embedder, RagStore, chunk_text, chunk_markdown
+    from godbot.core.rag import Embedder, RagStore
 
     home = Path(os.environ.get("GODBOT_HOME", str(Path.home() / ".godbot")))
     coll_dir = home / "rag" / collection
@@ -102,25 +160,7 @@ def build_index(
         store = RagStore(root=home / "rag", collection=collection)
         n = 0
         for p in walk_files(root):
-            try:
-                text = p.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                continue
-            chunks = chunk_markdown(text) if p.suffix == ".md" else chunk_text(text)
-            if not chunks:
-                continue
-            ids = [f"{p}:{c['start_line']}-{c['end_line']}" for c in chunks]
-            docs = [c["content"] for c in chunks]
-            metas = [
-                {
-                    "path": str(p.relative_to(root)),
-                    "lines": f"{c['start_line']}-{c['end_line']}",
-                }
-                for c in chunks
-            ]
-            embs = emb.embed(docs)
-            store.add(ids=ids, embeddings=embs, documents=docs, metadatas=metas)
-            n += len(chunks)
+            n += _embed_and_upsert(p, root, store, emb)
         return n
     finally:
         try:

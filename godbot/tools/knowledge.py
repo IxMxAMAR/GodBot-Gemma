@@ -49,6 +49,56 @@ def search_knowledge(query: str, top_k: int = 5, collection: str = "default") ->
 
 
 @tool()
+def update_workspace_index(path: str) -> str:
+    """Re-embed a single file's chunks into the active workspace's RAG index.
+
+    Use this after editing a file (write_file / edit_file) so subsequent
+    search_workspace calls see the new content. Pass either a relative
+    path (resolved against the workspace) or an absolute path that
+    actually lives inside the workspace. Returns a one-line status
+    saying how many chunks were upserted.
+
+    The workspace must already have an index — call POST
+    /api/rag/index_workspace once first if not.
+    """
+    ws = current_workspace()
+    if ws is None:
+        return "(no active workspace; open a folder first)"
+    from pathlib import Path as _Path
+    p = _Path(path)
+    if not p.is_absolute():
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    # Require the file to be inside the workspace — keep RAG scoped.
+    try:
+        p.relative_to(ws.root)
+    except ValueError:
+        return f"[error] {p} is outside the active workspace"
+
+    collection = workspace_collection_name(str(ws.root))
+    coll_dir = _rag_root() / collection
+    if not coll_dir.exists():
+        return (
+            "(workspace not indexed yet; POST /api/rag/index_workspace "
+            "first to seed the collection)"
+        )
+
+    from godbot.index import update_file
+
+    if not p.is_file():
+        return f"[error] not a regular file: {p}"
+    try:
+        n = update_file(p, collection=collection, workspace_root=ws.root)
+    except Exception as e:
+        return f"(update_workspace_index failed: {type(e).__name__}: {e})"
+    rel = p.relative_to(ws.root)
+    return f"ok: re-embedded {n} chunks for {rel} into {collection}"
+
+
+@tool()
 def search_workspace(query: str, top_k: int = 5) -> str:
     """Semantic search over the active workspace's indexed files.
 
