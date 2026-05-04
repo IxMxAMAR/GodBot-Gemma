@@ -207,6 +207,84 @@ def _resolve_workspace_file(path: str) -> tuple[str | None, str | None]:
 
 
 @tool()
+def directory_size(path: str = ".") -> str:
+    """Report total disk usage of a directory tree (sub-project 56).
+
+    Walks ``path`` recursively, sums file sizes, and reports the top
+    10 largest files plus the grand total in human-readable units.
+    Workspace-confined: ``path`` defaults to the workspace root.
+
+    Useful for "what's hogging space here?" reconnaissance — point at
+    ``.venv`` or ``node_modules`` to see the heavy hitters.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+
+    ws = current_workspace()
+    p = _Path(path)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    if not p.is_dir():
+        return f"[error] not a directory: {p}"
+
+    total_bytes = 0
+    file_count = 0
+    largest: list[tuple[int, _Path]] = []
+    skipped_dirs = {".git", "__pycache__", ".pytest_cache"}
+    try:
+        for root, dirs, files in _os.walk(p):
+            dirs[:] = [d for d in dirs if d not in skipped_dirs]
+            for fname in files:
+                fp = _Path(root) / fname
+                try:
+                    sz = fp.stat().st_size
+                except OSError:
+                    continue
+                total_bytes += sz
+                file_count += 1
+                # Maintain top-10 by size with simple insert-and-trim.
+                largest.append((sz, fp))
+                if len(largest) > 50:
+                    largest.sort(key=lambda x: x[0], reverse=True)
+                    largest = largest[:10]
+    except OSError as e:
+        return f"[error] walk failed: {e}"
+
+    largest.sort(key=lambda x: x[0], reverse=True)
+    largest = largest[:10]
+
+    def _human(n: int) -> str:
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if n < 1024:
+                return f"{n:.1f} {unit}" if unit != "B" else f"{n} {unit}"
+            n /= 1024  # type: ignore[assignment]
+        return f"{n:.1f} PB"
+
+    out = [
+        f"path: {p}",
+        f"total: {_human(total_bytes)} across {file_count} file(s)",
+    ]
+    if largest:
+        out.append("top 10 largest:")
+        for sz, fp in largest:
+            try:
+                rel = fp.relative_to(p)
+            except ValueError:
+                rel = fp
+            out.append(f"  {_human(sz)}  {rel}")
+    return "\n".join(out)
+
+
+@tool()
 def head(path: str, lines: int = 50) -> str:
     """Return the first ``lines`` lines of a workspace-confined text file.
 
