@@ -1795,6 +1795,58 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             "events_imported": kept,
         }
 
+    @app.get("/api/sessions/{sid}/explain")
+    async def session_explain(sid: str):
+        """Concise auto-label for a session (sub-project 61).
+
+        Useful for SessionList UIs that want readable labels instead of
+        opaque session ids. Returns:
+
+          {
+            label: <first 80 chars of the first user message>,
+            tool_calls: <int>,
+            messages: <int>,        # user + assistant_final
+            errors: <int>,          # synthetic_tool_result counts
+            tools_used: [name, ...] # distinct tools called, top 10
+          }
+
+        Read-only walk of events.jsonl; safe to call frequently.
+        """
+        from collections import Counter
+
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+
+        first_user = ""
+        tool_calls = 0
+        messages = 0
+        errors = 0
+        tools_used: Counter[str] = Counter()
+        for ev in s._events():
+            t = ev.get("type")
+            if t == "user":
+                if not first_user:
+                    first_user = (ev.get("content") or "").strip()
+                messages += 1
+            elif t == "assistant_final":
+                messages += 1
+            elif t == "assistant_tool_call":
+                tool_calls += 1
+                name = ev.get("name") or "(unknown)"
+                tools_used[name] += 1
+            elif t == "synthetic_tool_result":
+                errors += 1
+        label = first_user[:80].replace("\n", " ") or "(no user message)"
+        return {
+            "label": label,
+            "tool_calls": tool_calls,
+            "messages": messages,
+            "errors": errors,
+            "tools_used": [n for n, _ in tools_used.most_common(10)],
+        }
+
     @app.get("/api/sessions/{sid}/replay")
     async def session_replay(sid: str, delay_ms: int = 0):
         """Replay a past session's events as SSE (sub-project 58).
