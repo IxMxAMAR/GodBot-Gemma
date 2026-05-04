@@ -616,6 +616,46 @@ def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
 
 
 @tool()
+def regex_search(pattern: str, text: str, max_matches: int = 20, ignore_case: bool = False) -> str:
+    """Find regex matches in inline text (sub-project 70).
+
+    Returns one line per match in ``pos: <text>`` format, where ``pos``
+    is the 0-based start offset. Capped at ``max_matches`` (default 20,
+    hard limit 500). ``ignore_case=True`` enables case-insensitive
+    matching. Returns ``[error] regex: <msg>`` on bad pattern.
+
+    Use for "does this string match this pattern?" / "find all email
+    addresses in this paragraph" reasoning. Cheaper than reaching for
+    run_python.
+    """
+    import re as _re
+
+    if not pattern:
+        return "[error] pattern required"
+    if not isinstance(text, str):
+        return "[error] text must be a string"
+    flags = _re.IGNORECASE if ignore_case else 0
+    try:
+        rx = _re.compile(pattern, flags)
+    except _re.error as e:
+        return f"[error] regex: {e}"
+    cap = max(1, min(int(max_matches), 500))
+    matches: list[str] = []
+    truncated = False
+    for m in rx.finditer(text):
+        matches.append(f"{m.start()}: {m.group(0)}")
+        if len(matches) >= cap:
+            truncated = True
+            break
+    if not matches:
+        return "(no matches)"
+    out = f"{len(matches)} match(es):\n" + "\n".join(matches)
+    if truncated:
+        out += f"\n... [stopped at max_matches={cap}]"
+    return out
+
+
+@tool()
 def file_info(path: str) -> str:
     """Report a file's metadata (sub-project 69).
 
