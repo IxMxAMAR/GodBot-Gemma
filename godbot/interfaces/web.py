@@ -1085,6 +1085,37 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
     async def health():
         return {"status": "ok"}
 
+    @app.post("/api/agent/abort_all")
+    async def agent_abort_all():
+        """Emergency cancel-all endpoint (sub-project 98).
+
+        Sets the cancel event on every in-flight session AND every
+        non-terminal background task. Returns counts of what was
+        signaled. Doesn't wait for them to actually stop — the cancel
+        flag fires; the next agent step picks it up.
+
+        Use case: "I changed my mind / I see something going wrong /
+        the LLM is in a loop" panic button. Studio can wire this to
+        a single keystroke.
+        """
+        from godbot.core.tasks import DEFAULT_RUNNER, _TERMINAL
+
+        sessions_signaled = 0
+        for sid, ev in list(_cancels.items()):
+            if not ev.is_set():
+                ev.set()
+                sessions_signaled += 1
+        tasks_signaled = 0
+        for rec in DEFAULT_RUNNER.list_tasks():
+            if rec.status not in _TERMINAL:
+                if DEFAULT_RUNNER.cancel_task(rec.id):
+                    tasks_signaled += 1
+        return {
+            "ok": True,
+            "sessions_signaled": sessions_signaled,
+            "tasks_signaled": tasks_signaled,
+        }
+
     @app.get("/api/version")
     async def api_version():
         """Bare version probe (sub-project 94).
