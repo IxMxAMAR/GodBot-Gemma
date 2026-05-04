@@ -137,6 +137,30 @@ def write_file(path: str, content: str) -> str:
 
 
 @tool(dangerous=True)
+def mkdir(path: str, parents: bool = True) -> str:
+    """Create a directory (sub-project 59).
+
+    Workspace-confined. ``parents=True`` (default) creates intermediate
+    directories. Idempotent: a no-op when the directory already exists
+    returns ``"ok: exists"``. Returns ``[error] ...`` if a non-directory
+    file blocks the path.
+    """
+    path, err = _confine_or_error(path, check_links=False)
+    if err:
+        return err
+    p = Path(path)
+    if p.exists() and not p.is_dir():
+        return f"[error] path exists but is not a directory: {p}"
+    if p.exists():
+        return f"ok: exists {p}"
+    try:
+        p.mkdir(parents=parents, exist_ok=True)
+    except Exception as e:
+        return f"[error] mkdir failed: {type(e).__name__}: {e}"
+    return f"ok: created {p}"
+
+
+@tool(dangerous=True)
 def delete_file(path: str) -> str:
     """Delete a single file (sub-project 57).
 
