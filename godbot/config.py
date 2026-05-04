@@ -53,6 +53,22 @@ class DiscordConfig:
 
 
 @dataclass
+class AuthConfig:
+    """Optional API token authentication (sub-project 88).
+
+    When ``token`` is non-empty (either in config or via the
+    ``GODBOT_API_TOKEN`` env var, which wins), every ``/api/*`` request
+    must carry ``Authorization: Bearer <token>``. ``/api/health``
+    stays open so liveness probes don't need credentials.
+
+    Empty token = auth disabled (the default — back-compat with every
+    existing local deployment).
+    """
+
+    token: str = ""
+
+
+@dataclass
 class MCPServerConfigItem:
     """One MCP server entry from ``[mcp.servers.<name>]`` in config.toml.
 
@@ -110,6 +126,7 @@ class Config:
     discord: DiscordConfig = field(default_factory=DiscordConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     providers: ProvidersSection = field(default_factory=ProvidersSection)
+    auth: AuthConfig = field(default_factory=AuthConfig)
 
 
 def godbot_home() -> Path:
@@ -252,6 +269,7 @@ def load_config() -> Config:
         discord=DiscordConfig(**_filter_known(raw.get("discord") or {}, DiscordConfig)),
         mcp=_parse_mcp(raw.get("mcp") or {}),
         providers=_parse_providers(raw.get("providers") or {}),
+        auth=AuthConfig(**_filter_known(raw.get("auth") or {}, AuthConfig)),
     )
 
 

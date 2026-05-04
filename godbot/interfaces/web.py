@@ -960,6 +960,34 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Optional API token auth (sub-project 88). Activates when either
+    # GODBOT_API_TOKEN env var (wins) or [auth] token in config.toml is
+    # non-empty. When active, every /api/* and /v1/* request needs
+    # Authorization: Bearer <token>. /api/health stays open for liveness
+    # probes. Disabled by default for back-compat with local-only setups.
+    _cfg_for_auth = load_config()
+    _auth_token = os.environ.get("GODBOT_API_TOKEN") or _cfg_for_auth.auth.token
+
+    if _auth_token:
+        from fastapi import Request as _Req
+        from fastapi.responses import JSONResponse as _JsonResp
+
+        @app.middleware("http")
+        async def _api_token_auth(request: _Req, call_next):
+            path = request.url.path
+            if path == "/api/health" or not path.startswith(("/api/", "/v1/")):
+                return await call_next(request)
+            header = request.headers.get("authorization", "")
+            if header.startswith("Bearer "):
+                presented = header[7:].strip()
+                if presented == _auth_token:
+                    return await call_next(request)
+            return _JsonResp(
+                {"detail": "missing or invalid bearer token"},
+                status_code=401,
+                headers={"WWW-Authenticate": 'Bearer realm="godbot"'},
+            )
+
     @app.get("/api/health")
     async def health():
         return {"status": "ok"}
