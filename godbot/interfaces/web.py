@@ -117,6 +117,73 @@ def _loop_now() -> float:
     return asyncio.get_running_loop().time()
 
 
+def _render_session_markdown(s, events, cost_dict) -> str:
+    """Render a session as a human-readable markdown transcript.
+
+    Groups events by turn boundary (each user message starts one). Tool
+    calls are inlined under their assistant context with collapsible
+    code-fence blocks for the result. Used by GET /api/sessions/{sid}/
+    export?format=markdown.
+    """
+    lines: list[str] = []
+    lines.append(f"# Session `{s.id}`")
+    lines.append("")
+    meta_bits = []
+    if s.provider:
+        meta_bits.append(f"provider=`{s.provider}`")
+    if s.model_name:
+        meta_bits.append(f"model=`{s.model_name}`")
+    if s._meta.get("workspace_root"):
+        meta_bits.append(f"workspace=`{s._meta['workspace_root']}`")
+    if meta_bits:
+        lines.append("> " + " · ".join(meta_bits))
+        lines.append("")
+    u = s.usage
+    if u["turns"]:
+        lines.append(
+            f"**Usage:** {u['turns']} turns, "
+            f"{u['input_tokens']:,} in / {u['output_tokens']:,} out tokens "
+            f"(total {u['total_tokens']:,})"
+        )
+        if cost_dict.get("matched"):
+            lines.append(f"**Estimated cost:** ${cost_dict['usd']:.4f}")
+        lines.append("")
+
+    import json as _json
+    for ev in events:
+        t = ev.get("type")
+        if t == "user":
+            lines.append("## User")
+            lines.append("")
+            lines.append(ev.get("content", ""))
+            lines.append("")
+        elif t == "assistant_final":
+            lines.append("## Assistant")
+            lines.append("")
+            lines.append(ev.get("content", ""))
+            lines.append("")
+        elif t == "assistant_tool_call":
+            lines.append(f"### Tool call: `{ev.get('name', '?')}`")
+            args_pretty = _json.dumps(ev.get("args") or {}, indent=2)
+            lines.append("```json")
+            lines.append(args_pretty)
+            lines.append("```")
+        elif t == "tool_result":
+            lines.append("**Tool result:**")
+            lines.append("")
+            content = ev.get("content", "")
+            lines.append("```")
+            lines.append(content[:2000])
+            if len(content) > 2000:
+                lines.append(f"... [truncated, full blob {ev.get('blob') or '—'}]")
+            lines.append("```")
+            lines.append("")
+        elif t == "synthetic_tool_result":
+            lines.append(f"_<system nudge: {ev.get('content', '')[:200]}>_")
+            lines.append("")
+    return "\n".join(lines)
+
+
 def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
     @app.post("/api/chat")
     async def chat(request: Request, llm: LLMClient = Depends(get_llm)):
@@ -915,6 +982,49 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
         except FileNotFoundError:
             raise HTTPException(404, "no such session")
         return s.usage
+
+    @app.get("/api/sessions/{sid}/export")
+    async def session_export(sid: str, format: str = "json"):
+        """Export a full session as a self-contained record (sub-project 31).
+
+        Bundles meta, every event from events.jsonl, usage, budget, and
+        the cost breakdown. Useful for archival, sharing a repro,
+        post-mortem analysis, or feeding a session into another tool.
+
+        ``format=json`` (default) returns a structured JSON object.
+        ``format=markdown`` returns a human-readable transcript with
+        sections for user/assistant/tool turns.
+        """
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        events = list(s._events())
+        from godbot.core.pricing import compute_cost
+        cost = compute_cost(
+            provider=s.provider,
+            model=s.model_name or s.model,
+            input_tokens=s.usage["input_tokens"],
+            output_tokens=s.usage["output_tokens"],
+        )
+        if format == "markdown":
+            from fastapi.responses import PlainTextResponse
+            md = _render_session_markdown(s, events, cost.to_dict())
+            return PlainTextResponse(md, media_type="text/markdown; charset=utf-8")
+        return {
+            "id": s.id,
+            "model": s.model,
+            "provider": s.provider,
+            "model_name": s.model_name,
+            "protocol": s.protocol,
+            "workspace_root": s._meta.get("workspace_root"),
+            "started_at": s._meta.get("started_at"),
+            "ended_at": s._meta.get("ended_at"),
+            "usage": s.usage,
+            "budget": s.budget,
+            "cost": cost.to_dict(),
+            "events": events,
+        }
 
     @app.post("/api/sessions/{sid}/budget")
     async def session_set_budget(sid: str, request: Request):
