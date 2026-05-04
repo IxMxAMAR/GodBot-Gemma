@@ -1085,6 +1085,21 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
     async def health():
         return {"status": "ok"}
 
+    @app.get("/api/version")
+    async def api_version():
+        """Bare version probe (sub-project 94).
+
+        Returns ``{version: "x.y.z"}`` from importlib.metadata. Cheaper
+        than /api/health/details for clients that only need to know
+        "which daemon version am I talking to?" — handy for compat
+        checks before driving newer endpoints.
+        """
+        try:
+            from importlib.metadata import version as _version
+            return {"version": _version("godbot")}
+        except Exception:
+            return {"version": "0.0.0"}
+
     @app.post("/api/agent/raw_completion/stream")
     async def agent_raw_completion_stream(request: Request):
         """Streaming version of POST /api/agent/raw_completion (sub-project 89).
