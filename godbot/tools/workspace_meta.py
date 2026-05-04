@@ -616,6 +616,58 @@ def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
 
 
 @tool()
+def random_id(kind: str = "uuid", length: int = 16) -> str:
+    """Generate a random identifier (sub-project 62).
+
+    ``kind`` selects the shape:
+      - ``"uuid"`` (default) — RFC 4122 UUID4 string.
+      - ``"hex"``  — random hex of ``length`` chars (1..256).
+      - ``"slug"`` — URL-safe base64 of ``length`` bytes (1..64).
+      - ``"int"``  — random integer in [0, 2**63).
+
+    Useful when the agent needs a non-colliding name for a temp file,
+    a request id, an API key placeholder, etc.
+    """
+    import secrets as _secrets
+    import uuid as _uuid
+
+    kind = (kind or "uuid").lower()
+    if kind == "uuid":
+        return str(_uuid.uuid4())
+    if kind == "hex":
+        n = max(1, min(int(length), 256))
+        return _secrets.token_hex(max(1, n // 2))[:n]
+    if kind == "slug":
+        n = max(1, min(int(length), 64))
+        return _secrets.token_urlsafe(n)
+    if kind == "int":
+        return str(_secrets.randbelow(2**63))
+    return f"[error] unknown kind: {kind!r}"
+
+
+@tool()
+def urlquote(text: str, safe: str = "") -> str:
+    """Percent-encode ``text`` for use in a URL (sub-project 62).
+
+    ``safe`` is a string of characters left unescaped (default: none).
+    Useful when the agent constructs an API URL with user content.
+    """
+    from urllib.parse import quote as _quote
+    if not isinstance(text, str):
+        return "[error] text must be a string"
+    return _quote(text, safe=safe)
+
+
+@tool()
+def urlunquote(text: str) -> str:
+    """Decode a percent-encoded URL string (sub-project 62)."""
+    from urllib.parse import unquote as _unquote
+    if not isinstance(text, str):
+        return "[error] text must be a string"
+    return _unquote(text)
+
+
+@tool()
 def format_json(text: str, indent: int = 2, sort_keys: bool = False) -> str:
     """Pretty-print a JSON blob (sub-project 60).
 
