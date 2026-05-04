@@ -137,6 +137,95 @@ def write_file(path: str, content: str) -> str:
 
 
 @tool(dangerous=True)
+def delete_file(path: str) -> str:
+    """Delete a single file (sub-project 57).
+
+    Workspace-confined. Refuses directories — use a shell command for
+    those (the gate machinery prompts the user). Returns ``"ok: deleted
+    <path>"`` on success or ``[error] ...`` if the file doesn't exist
+    or the deletion fails.
+    """
+    path, err = _confine_or_error(path, check_links=True)
+    if err:
+        return err
+    p = Path(path)
+    if not p.exists():
+        return f"[error] file not found: {path}"
+    if p.is_dir():
+        return f"[error] refusing to delete directory: {path} — use run_powershell for dirs"
+    try:
+        p.unlink()
+    except Exception as e:
+        return f"[error] delete failed: {type(e).__name__}: {e}"
+    return f"ok: deleted {p}"
+
+
+@tool(dangerous=True)
+def copy_file(src: str, dst: str) -> str:
+    """Copy a file from ``src`` to ``dst`` (sub-project 57).
+
+    Both paths workspace-confined. Creates parent directories of ``dst``
+    if needed. Refuses to overwrite an existing ``dst`` — caller can
+    delete first to force replacement, which keeps each destructive
+    step explicit through the gate.
+    """
+    import shutil as _shutil
+    src_p, err = _confine_or_error(src, check_links=True)
+    if err:
+        return err
+    dst_p, err = _confine_or_error(dst, check_links=False)
+    if err:
+        return err
+    s = Path(src_p)
+    d = Path(dst_p)
+    if not s.exists():
+        return f"[error] source not found: {src}"
+    if not s.is_file():
+        return f"[error] source is not a file: {src}"
+    if d.exists():
+        return f"[error] destination exists: {dst} (delete it first to overwrite)"
+    d.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _shutil.copy2(s, d)
+    except Exception as e:
+        return f"[error] copy failed: {type(e).__name__}: {e}"
+    return f"ok: copied {s} -> {d}"
+
+
+@tool(dangerous=True)
+def move_file(src: str, dst: str) -> str:
+    """Move/rename a file (sub-project 57).
+
+    Both paths workspace-confined. Creates parent directories of ``dst``
+    if needed. Refuses to overwrite an existing ``dst``. Use this for
+    renames (same parent directory) and intra-workspace moves; for
+    moves spanning the workspace boundary the agent should use a shell
+    command so the gate clearly fires.
+    """
+    import shutil as _shutil
+    src_p, err = _confine_or_error(src, check_links=True)
+    if err:
+        return err
+    dst_p, err = _confine_or_error(dst, check_links=False)
+    if err:
+        return err
+    s = Path(src_p)
+    d = Path(dst_p)
+    if not s.exists():
+        return f"[error] source not found: {src}"
+    if not s.is_file():
+        return f"[error] source is not a file: {src}"
+    if d.exists():
+        return f"[error] destination exists: {dst} (delete it first to overwrite)"
+    d.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _shutil.move(str(s), str(d))
+    except Exception as e:
+        return f"[error] move failed: {type(e).__name__}: {e}"
+    return f"ok: moved {s} -> {d}"
+
+
+@tool(dangerous=True)
 def edit_file(path: str, old: str, new: str) -> str:
     """Replace one unique occurrence of `old` with `new` in a file."""
     path, err = _confine_or_error(path, check_links=True)
