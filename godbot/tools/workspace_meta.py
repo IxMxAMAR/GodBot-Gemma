@@ -182,6 +182,82 @@ def check_python_syntax(path: str = "", code: str = "") -> str:
     return f"ok: {label} parses cleanly"
 
 
+def _resolve_workspace_file(path: str) -> tuple[str | None, str | None]:
+    """Workspace-confine and validate a file path. Returns (str(path), None)
+    or (None, error_msg)."""
+    from pathlib import Path as _Path
+    if not path:
+        return None, "[error] path required"
+    ws = current_workspace()
+    p = _Path(path)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return None, f"[error] cannot resolve {path!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return None, f"[error] {p} is outside the active workspace"
+    if not p.is_file():
+        return None, f"[error] not a file: {p}"
+    return str(p), None
+
+
+@tool()
+def head(path: str, lines: int = 50) -> str:
+    """Return the first ``lines`` lines of a workspace-confined text file.
+
+    Cheaper than ``read_file`` when you only need a peek — typical use
+    case is checking the top of a log to see whether a process started
+    cleanly. ``lines`` is capped at 5000 to keep responses bounded.
+    """
+    from pathlib import Path as _Path
+    p_str, err = _resolve_workspace_file(path)
+    if err:
+        return err
+    n = max(0, min(int(lines), 5000))
+    try:
+        with open(p_str, "r", encoding="utf-8", errors="replace") as f:
+            out: list[str] = []
+            for i, line in enumerate(f):
+                if i >= n:
+                    break
+                out.append(f"{i + 1}\t{line.rstrip()}")
+        return "\n".join(out) if out else "(empty file)"
+    except Exception as e:
+        return f"[error] read failed: {type(e).__name__}: {e}"
+
+
+@tool()
+def tail(path: str, lines: int = 50) -> str:
+    """Return the last ``lines`` lines of a workspace-confined text file.
+
+    Useful for checking the end of a log or recently-appended events.
+    Reads the whole file so for huge files this isn't free; if you
+    need true seek-from-end behavior, use ``run_powershell`` with
+    ``Get-Content -Tail`` (Windows) or ``run_bash`` with ``tail`` (Unix).
+    """
+    p_str, err = _resolve_workspace_file(path)
+    if err:
+        return err
+    n = max(0, min(int(lines), 5000))
+    try:
+        with open(p_str, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+    except Exception as e:
+        return f"[error] read failed: {type(e).__name__}: {e}"
+    if not all_lines:
+        return "(empty file)"
+    selected = all_lines[-n:]
+    start = len(all_lines) - len(selected) + 1
+    return "\n".join(
+        f"{start + i}\t{line.rstrip()}" for i, line in enumerate(selected)
+    )
+
+
 @tool()
 def list_functions(path: str) -> str:
     """List every top-level + class-method definition in a Python file (sub-project 54).
