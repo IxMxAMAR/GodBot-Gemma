@@ -616,6 +616,34 @@ def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
 
 
 @tool()
+def python_info() -> str:
+    """Report the Python interpreter, version, prefix, and key installed
+    packages (sub-project 64).
+
+    Useful for "is this the venv I expect?" checks. Lists up to 30
+    distribution names that are installed, in alphabetical order.
+    Non-dangerous; in-process introspection only.
+    """
+    import sys
+    try:
+        from importlib.metadata import distributions
+        names = sorted({d.metadata["Name"] for d in distributions() if d.metadata.get("Name")})
+    except Exception:
+        names = []
+    parts: list[str] = []
+    parts.append(f"executable: {sys.executable}")
+    parts.append(f"version: {sys.version.split()[0]}")
+    parts.append(f"prefix: {sys.prefix}")
+    parts.append(f"platform: {sys.platform}")
+    if names:
+        head = names[:30]
+        parts.append(f"distributions ({len(names)} total, top 30): {', '.join(head)}")
+    else:
+        parts.append("distributions: (none discovered)")
+    return "\n".join(parts)
+
+
+@tool()
 def random_id(kind: str = "uuid", length: int = 16) -> str:
     """Generate a random identifier (sub-project 62).
 
