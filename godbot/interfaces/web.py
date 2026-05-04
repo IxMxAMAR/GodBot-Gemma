@@ -1795,6 +1795,43 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             "events_imported": kept,
         }
 
+    @app.get("/api/sessions/{sid}/messages")
+    async def session_messages(sid: str, offset: int = 0, limit: int = 50, role: Optional[str] = None):
+        """Paginated access to a session's message log (sub-project 72).
+
+        Returns ``{messages: [...], total: int, has_more: bool}``.
+        Each message: ``{role, content, index}`` where index is the
+        0-based position in the LLM-format log.
+
+        ``role`` filters to one of ``"user"`` / ``"assistant"`` /
+        ``"system"``. ``offset``/``limit`` control pagination
+        (limit clamped to [1, 200]). Use this instead of GET
+        /api/sessions/{sid} when you have a big session and only need
+        recent messages.
+        """
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        msgs = s.messages_for_llm(max_context=0)
+        indexed = [
+            {"role": m["role"], "content": m["content"], "index": i}
+            for i, m in enumerate(msgs)
+        ]
+        if role is not None:
+            if role not in {"user", "assistant", "system"}:
+                raise HTTPException(400, "role must be 'user', 'assistant', or 'system'")
+            indexed = [m for m in indexed if m["role"] == role]
+        total = len(indexed)
+        offset = max(0, int(offset))
+        limit = max(1, min(int(limit), 200))
+        page = indexed[offset:offset + limit]
+        return {
+            "messages": page,
+            "total": total,
+            "has_more": offset + limit < total,
+        }
+
     @app.get("/api/sessions/{sid}/explain")
     async def session_explain(sid: str):
         """Concise auto-label for a session (sub-project 61).
