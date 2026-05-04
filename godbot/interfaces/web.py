@@ -34,13 +34,14 @@ _boot_mcp()
 
 
 # Shared per-process state.
-_streams: dict[str, asyncio.Queue] = {}
+# Per-session event logs replace the legacy single-consumer queue
+# (sub-project 21). EventLog is a sequence-numbered ring buffer with
+# multi-subscriber fanout, so a Studio reconnect after a network blip
+# replays buffered events from its last-seen seq instead of seeing 409.
+from godbot.core.event_log import EventLog as _EventLog
+_logs: dict[str, _EventLog] = {}
 _cancels: dict[str, asyncio.Event] = {}
 _sessions_cache: dict[str, Session] = {}
-# Sessions whose SSE stream currently has an attached consumer.
-# True resumability would require buffering all events for replay; for v0.1
-# we fail-fast with HTTP 409 instead of hanging the second connection.
-_active_streams: set[str] = set()
 
 
 def get_llm() -> LLMClient:
@@ -72,12 +73,34 @@ def _provider_for_session(session: Session):
     return get_provider_factory(name, pcfg)
 
 
-def _ensure_queue(sid: str) -> asyncio.Queue:
-    q = _streams.get(sid)
-    if q is None:
-        q = asyncio.Queue()
-        _streams[sid] = q
-    return q
+def _ensure_log(sid: str) -> _EventLog:
+    """Get or create the per-session event log.
+
+    Returns the existing log even when it's closed — closed logs still
+    hold the replay buffer that late subscribers want to read. A fresh
+    log is created only when none has ever existed for this session.
+    For mid-turn rotation use :func:`_replace_log`.
+    """
+    log = _logs.get(sid)
+    if log is None:
+        log = _EventLog()
+        _logs[sid] = log
+    return log
+
+
+def _replace_log(sid: str) -> _EventLog:
+    """Force-create a fresh EventLog for ``sid``, closing any existing one.
+
+    Called at POST /api/chat so each turn gets its own seq numbering.
+    Subscribers from the previous turn's log will see ``close()`` fire
+    and exit; the new log starts empty at seq 0.
+    """
+    old = _logs.get(sid)
+    if old is not None and not old.closed:
+        old.close()
+    fresh = _EventLog()
+    _logs[sid] = fresh
+    return fresh
 
 
 def _ensure_cancel(sid: str) -> asyncio.Event:
@@ -110,10 +133,13 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
 
         cancel = _ensure_cancel(sid)
         cancel.clear()
-        queue = _ensure_queue(sid)
+        # Fresh log per turn so the per-turn seq counter starts at 0 and
+        # any stale subscribers from a previous turn exit cleanly.
+        log = _replace_log(sid)
 
         async def emit(ev):
-            await queue.put(ev)
+            d = event_to_dict(ev)
+            log.publish(d["type"], d)
 
         async def runner():
             try:
@@ -130,41 +156,61 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
                 else:
                     await run_turn(llm=llm, **kwargs)
             finally:
-                await queue.put(None)  # sentinel
+                # Close the log so subscribers exit; we keep the closed log
+                # in _logs so a late subscriber can still replay buffered
+                # events (e.g. for "did the previous turn finish?" queries).
+                log.close()
 
         asyncio.create_task(runner())
         return {"session_id": sid}
 
     @app.get("/api/chat/stream")
-    async def chat_stream(session_id: str):
+    async def chat_stream(request: Request, session_id: str, last_event_id: int = 0):
+        """SSE stream for a session's chat events (sub-project 21).
+
+        Multi-subscriber: any number of clients can attach to the same
+        session simultaneously. Reconnecting clients should send the
+        ``Last-Event-ID`` header (or ``last_event_id`` query param) with
+        the seq of the last event they processed; the server replays
+        buffered events past that cursor before tailing for new ones.
+
+        Each emitted SSE event carries an ``id:`` line set to its seq, so
+        browsers automatically resend Last-Event-ID on reconnect.
+        """
         from sse_starlette.sse import EventSourceResponse
-        # Single-consumer guard. The Queue can only be drained once; a second
-        # consumer would silently hang (or worse, race the first). Fail fast.
-        if session_id in _active_streams:
-            raise HTTPException(
-                409,
-                "stream already attached; wait for current run or POST /api/stop",
-            )
-        queue = _ensure_queue(session_id)
-        _active_streams.add(session_id)
+        # Honor the SSE-standard Last-Event-ID header if present; the
+        # query-string fallback supports clients that can't set headers
+        # (e.g. EventSource in browsers without polyfills).
+        hdr = request.headers.get("last-event-id")
+        if hdr:
+            try:
+                last_event_id = int(hdr)
+            except ValueError:
+                pass
+        log = _ensure_log(session_id)
 
         async def gen():
-            try:
-                heartbeat_at = _loop_now() + 15
-                while True:
-                    try:
-                        timeout = max(0.1, heartbeat_at - _loop_now())
-                        ev = await asyncio.wait_for(queue.get(), timeout=timeout)
-                    except asyncio.TimeoutError:
+            heartbeat_at = _loop_now() + 15
+            cursor = last_event_id
+            async for ev in log.follow(since_seq=cursor, idle_timeout=1.0):
+                # `__idle__` is the EventLog's keepalive sentinel; convert
+                # it to an SSE comment line if it's time to ping.
+                if ev.name == "__idle__":
+                    if _loop_now() >= heartbeat_at:
                         yield {"event": "ping", "data": "{}"}
                         heartbeat_at = _loop_now() + 15
-                        continue
-                    if ev is None:
-                        return
-                    d = event_to_dict(ev)
-                    yield {"event": d["type"], "data": json.dumps(d)}
-            finally:
-                _active_streams.discard(session_id)
+                    continue
+                yield {
+                    "id": str(ev.seq),
+                    "event": ev.name,
+                    "data": json.dumps(ev.data),
+                }
+                cursor = ev.seq
+                # `done` is a logical terminator — close the SSE stream
+                # so the client doesn't hang waiting for keepalives on a
+                # finished log.
+                if ev.name == "done":
+                    return
 
         return EventSourceResponse(gen())
 

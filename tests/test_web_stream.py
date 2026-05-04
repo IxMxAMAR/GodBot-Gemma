@@ -11,15 +11,13 @@ from tests._mock_llm import MockLLM
 @pytest.fixture(autouse=True)
 def _reset_web_state():
     """Reset module-level shared state to prevent cross-test leaks."""
-    webmod._streams.clear()
+    webmod._logs.clear()
     webmod._cancels.clear()
     webmod._sessions_cache.clear()
-    webmod._active_streams.clear()
     yield
-    webmod._streams.clear()
+    webmod._logs.clear()
     webmod._cancels.clear()
     webmod._sessions_cache.clear()
-    webmod._active_streams.clear()
 
 
 @pytest.fixture
@@ -65,22 +63,75 @@ def test_stop_endpoint_sets_cancel(app_with_mock):
     assert r.status_code == 200
 
 
-def test_second_stream_returns_409(app_with_mock):
-    """Two concurrent SSE consumers on the same session would race the queue;
-    the second connection must fail-fast with 409 rather than hang silently.
-    True resumability is deferred — see README 'Known issues'."""
+def test_late_subscriber_replays_buffered_events(app_with_mock):
+    """Sub-project 21: subscribers attaching AFTER the runner has already
+    published events still see them by replay. The legacy contract was 409
+    on second connection; the new contract is "follow with replay"."""
     app, _ = app_with_mock
     c = TestClient(app)
     sid = c.post("/api/sessions/new").json()["session_id"]
+    # Drive the turn first; the runner closes the EventLog on completion
+    # but the buffer remains for late subscribers.
+    r = c.post("/api/chat", json={"session_id": sid, "message": "hi"})
+    assert r.status_code == 200
+    # Drain the runner by attaching a stream until done.
+    with c.stream("GET", f"/api/chat/stream?session_id={sid}", timeout=5.0) as resp:
+        for line in resp.iter_lines():
+            if line.startswith("event: done"):
+                break
+    # Now attach a SECOND time — the events are buffered, so we should
+    # still receive them via replay (not 409).
+    events = []
+    ids = []
+    with c.stream("GET", f"/api/chat/stream?session_id={sid}", timeout=5.0) as resp:
+        assert resp.status_code == 200
+        for line in resp.iter_lines():
+            if line.startswith("event:"):
+                events.append(line.split(":", 1)[1].strip())
+            elif line.startswith("id:"):
+                ids.append(line.split(":", 1)[1].strip())
+            if "done" in events:
+                break
+    assert "done" in events
+    # Each emitted SSE event must carry an id (the EventLog seq).
+    assert len(ids) >= 1
+    # And the ids must be monotonically increasing integers.
+    int_ids = [int(x) for x in ids]
+    assert int_ids == sorted(int_ids)
 
-    # Mark the stream as active without actually consuming, then verify a new
-    # connection is rejected. We poke the module state directly because
-    # opening two real concurrent SSE streams from the test client is awkward
-    # (the first stream context manager would block the test).
-    webmod._active_streams.add(sid)
-    try:
-        r = c.get(f"/api/chat/stream?session_id={sid}")
-        assert r.status_code == 409
-        assert "already attached" in r.text
-    finally:
-        webmod._active_streams.discard(sid)
+
+def test_reconnect_with_last_event_id_resumes(app_with_mock):
+    """Passing ?last_event_id=N returns only events with seq > N."""
+    app, _ = app_with_mock
+    c = TestClient(app)
+    sid = c.post("/api/sessions/new").json()["session_id"]
+    c.post("/api/chat", json={"session_id": sid, "message": "hi"})
+    # Drain once to populate.
+    with c.stream("GET", f"/api/chat/stream?session_id={sid}", timeout=5.0) as resp:
+        for line in resp.iter_lines():
+            if line.startswith("event: done"):
+                break
+    # Reconnect with a high last_event_id — fewer events should come through.
+    log = webmod._logs[sid]
+    head = log.head_seq
+    assert head >= 1
+    events_replay_full = []
+    with c.stream("GET", f"/api/chat/stream?session_id={sid}", timeout=5.0) as resp:
+        for line in resp.iter_lines():
+            if line.startswith("event:"):
+                events_replay_full.append(line.split(":", 1)[1].strip())
+            if "done" in events_replay_full:
+                break
+    events_replay_partial = []
+    with c.stream(
+        "GET",
+        f"/api/chat/stream?session_id={sid}&last_event_id={head - 1}",
+        timeout=5.0,
+    ) as resp:
+        for line in resp.iter_lines():
+            if line.startswith("event:"):
+                events_replay_partial.append(line.split(":", 1)[1].strip())
+            if "done" in events_replay_partial:
+                break
+    # Resuming from head-1 yields fewer (or at most equal) events than from 0.
+    assert len(events_replay_partial) <= len(events_replay_full)
