@@ -1,9 +1,25 @@
+"""Legacy LLMClient — preserved as a thin shim around the provider system.
+
+Originally this module was a hand-rolled LM Studio client. After
+sub-project 7 the daemon talks to providers via
+:mod:`godbot.core.providers`; ``LLMClient`` survives only because:
+
+  - ``MockLLM`` in tests calls the same ``complete_streaming(messages,
+    on_delta, response_format, cancel)`` signature, and the agent loop
+    still accepts ``llm=`` for back-compat.
+  - The CLI / TUI / web ``probe()`` flow used by "show me the model name"
+    UI has callers that haven't been migrated yet.
+
+For new code, prefer ``godbot.core.providers.get_provider("lmstudio")``.
+"""
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Callable, Optional
+
 import httpx
 
 log = logging.getLogger("godbot.llm")
@@ -11,11 +27,25 @@ log = logging.getLogger("godbot.llm")
 
 @dataclass
 class ModelInfo:
+    """Local copy of the legacy ModelInfo shape.
+
+    The richer :class:`godbot.core.providers.base.ModelInfo` lives in the
+    new abstraction — this one is preserved for ``LLMClient.probe()``
+    callers that already destructure ``info.id`` / ``info.context_length``.
+    """
+
     id: str
     context_length: Optional[int]
 
 
 class LLMClient:
+    """Thin OpenAI-compat client targeting LM Studio.
+
+    Used as a back-compat shim for callers that haven't migrated to the
+    Provider abstraction yet. New integrations should use
+    :func:`godbot.core.providers.get_provider`.
+    """
+
     def __init__(self, base_url: str, model: str = "auto", api_key: str = "lm-studio") -> None:
         self.base_url = base_url.rstrip("/")
         self.model_pref = model
@@ -60,9 +90,7 @@ class LLMClient:
     ) -> str:
         """POST /v1/chat/completions with stream=true.
 
-        Accumulates content deltas, awaits on_delta for each. Returns full
-        assistant content. If cancel is set during streaming, closes the HTTP
-        response and returns the partial content received so far.
+        Returns the accumulated assistant content as a plain string.
         """
         if cancel is not None and cancel.is_set():
             return ""

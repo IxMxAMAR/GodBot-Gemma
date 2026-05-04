@@ -48,7 +48,41 @@ class Session:
 
     @property
     def model(self) -> str:
+        # Legacy ``model`` field — kept for back-compat with callers that
+        # use ``session.model`` to display "the model in use" without
+        # caring which provider hosts it. New code should prefer
+        # :attr:`provider` + :attr:`model_name`.
         return self._meta.get("model", "")
+
+    @property
+    def provider(self) -> str:
+        """Provider id for this session.
+
+        Defaults to ``"lmstudio"`` for legacy meta.json files that pre-date
+        the provider abstraction (sub-project 7) so older sessions keep
+        working unchanged.
+        """
+        return self._meta.get("provider", "lmstudio")
+
+    @property
+    def model_name(self) -> str:
+        """Provider-scoped model id (e.g. ``"claude-3-5-sonnet-latest"``,
+        ``"auto"``). Falls back to legacy ``model`` for back-compat."""
+        v = self._meta.get("model_name")
+        if isinstance(v, str) and v:
+            return v
+        return self._meta.get("model", "auto") or "auto"
+
+    @property
+    def protocol(self) -> Optional[str]:
+        """Per-session tool-call protocol override.
+
+        ``None`` means "use the provider's preference for this model".
+        Concrete values are :data:`godbot.core.providers.NATIVE_TOOLS` or
+        :data:`godbot.core.providers.REACT_JSON`.
+        """
+        v = self._meta.get("protocol")
+        return v if isinstance(v, str) and v else None
 
     @property
     def yolo(self) -> bool:
@@ -68,6 +102,9 @@ class Session:
         rag_collection: Optional[str] = None,
         workspace_root: Optional[str] = None,
         auto_approve_in_sandbox: bool = False,
+        provider: str = "lmstudio",
+        model_name: Optional[str] = None,
+        protocol: Optional[str] = None,
     ) -> "Session":
         sid = _now_id()
         sdir = Path(root) / sid
@@ -81,6 +118,12 @@ class Session:
             "started_at": datetime.now().isoformat(timespec="seconds"),
             "ended_at": None,
             "model": model,
+            # New (sub-project 7) — provider/model_name/protocol let one
+            # session pick a backend. Legacy meta without these keys reads
+            # back as ``provider="lmstudio"`` via the property accessors.
+            "provider": provider,
+            "model_name": model_name if model_name is not None else model,
+            "protocol": protocol,
             "tool_overrides": None,
             "auto_approved_tools": [],
             "yolo": False,
@@ -91,6 +134,22 @@ class Session:
         cls._write_meta(sdir, meta)
         (sdir / "events.jsonl").touch()
         return cls(Path(root), sid, meta)
+
+    def set_provider(
+        self,
+        provider: str,
+        model_name: Optional[str] = None,
+        protocol: Optional[str] = None,
+    ) -> None:
+        """Update the session's provider selection. ``model_name`` and
+        ``protocol`` are independently optional — pass ``None`` to leave
+        them unchanged."""
+        self._meta["provider"] = provider
+        if model_name is not None:
+            self._meta["model_name"] = model_name
+        if protocol is not None:
+            self._meta["protocol"] = protocol
+        self._save_meta()
 
     @property
     def workspace(self):

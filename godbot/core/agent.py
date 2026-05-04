@@ -9,9 +9,19 @@ from godbot.core.events import (
     DoneEvent, ErrorEvent, Event, GateEvent,
     TokenEvent, ToolCallEvent, ToolResultEvent,
 )
+from godbot.core.providers import (
+    NATIVE_TOOLS,
+    REACT_JSON,
+    Provider,
+    TurnResult,
+)
 from godbot.core.registry import Registry, ToolSpec
 from godbot.core.session import Session
-from godbot.core.schema import build_react_schema, validate_react_response
+from godbot.core.schema import (
+    build_native_tool_schemas,
+    build_react_schema,
+    validate_react_response,
+)
 from godbot.core.workspace import set_workspace, _current as _workspace_current
 
 
@@ -67,7 +77,8 @@ def _compute_fs_diff(name: str, args: dict) -> Optional[dict]:
 
 async def run_turn(
     *,
-    llm,
+    llm=None,
+    provider: Optional[Provider] = None,
     session: Session,
     registry: Registry,
     emit: EmitFn,
@@ -77,13 +88,29 @@ async def run_turn(
     system_prompt: str,
     system_prompt_builder: Optional[SystemPromptBuilder] = None,
 ) -> None:
+    """Run one agent turn loop.
+
+    Two call shapes are supported for backward compatibility:
+
+    - **Legacy**: pass ``llm=`` (anything with
+      ``complete_streaming(messages, on_delta, response_format, cancel)``).
+      The agent uses the ``REACT_JSON`` protocol and wraps the call to
+      look like the legacy LLMClient. ``MockLLM`` in tests follows this
+      shape and continues to work unchanged.
+    - **New**: pass ``provider=`` (a :class:`Provider`). The agent reads
+      ``session.protocol`` (or the provider's preference) and routes
+      through ``provider.complete_streaming(...)``.
+
+    Exactly one of ``llm`` / ``provider`` must be supplied.
+    """
+    if (llm is None) == (provider is None):
+        raise ValueError("run_turn requires exactly one of llm= or provider=")
+
     enabled = registry.subset(session.tool_overrides)
     tool_schemas = {t.name: t.schema for t in enabled}
+    descriptions = {t.name: t.description for t in enabled}
     react_schema = build_react_schema(tool_schemas)
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {"name": "react", "schema": react_schema, "strict": True},
-    }
+    native_tool_schemas = build_native_tool_schemas(tool_schemas, descriptions)
 
     # Build the system prompt from the filtered tool subset so the model never
     # sees catalog entries that the schema enum would reject anyway. Falls
@@ -110,6 +137,17 @@ async def run_turn(
                 sys_prompt = sys_prompt + "\n\n" + mem
         except Exception:
             pass  # memory injection is best-effort
+
+    # Resolve the provider's preferred protocol once, up front. With the
+    # legacy ``llm=`` shim we always run ReAct; with a real provider we
+    # honour the per-session override if set.
+    if provider is not None:
+        model_info = await provider.select_model(session.model_name or "auto")
+        protocol_pref = session.protocol or provider.preferred_protocol(model_info)
+    else:
+        model_info = None
+        protocol_pref = REACT_JSON
+
     try:
         for step in range(max_steps):
             if cancel.is_set():
@@ -121,15 +159,56 @@ async def run_turn(
             async def _on_delta(t: str) -> None:
                 await emit(TokenEvent(text=t))
 
-            full_text = await llm.complete_streaming(
-                messages=messages,
-                on_delta=_on_delta,
-                response_format=response_format,
-                cancel=cancel,
-            )
+            if provider is not None:
+                turn = await provider.complete_streaming(
+                    model=model_info,
+                    messages=messages,
+                    on_delta=_on_delta,
+                    protocol=protocol_pref,
+                    tool_schemas=native_tool_schemas if protocol_pref == NATIVE_TOOLS else None,
+                    react_schema=react_schema if protocol_pref == REACT_JSON else None,
+                    cancel=cancel,
+                )
+            else:
+                # Legacy llm.complete_streaming returns a plain string. Wrap
+                # it in a TurnResult-shaped envelope so downstream code is
+                # unified. Always REACT_JSON.
+                response_format = {
+                    "type": "json_schema",
+                    "json_schema": {"name": "react", "schema": react_schema, "strict": True},
+                }
+                full_text = await llm.complete_streaming(
+                    messages=messages,
+                    on_delta=_on_delta,
+                    response_format=response_format,
+                    cancel=cancel,
+                )
+                turn = _legacy_react_turn(full_text)
 
+            # Branch on the protocol used for *this* turn.
+            if protocol_pref == NATIVE_TOOLS:
+                if turn.tool_calls:
+                    # The native-tools provider returned one or more tool
+                    # invocations. Run them sequentially; each one feeds
+                    # the next turn via session events.
+                    for ptc in turn.tool_calls:
+                        await _handle_native_tool_call(
+                            ptc, turn.raw_text, session, registry, enabled, emit, cancel,
+                        )
+                    continue
+                if turn.final_answer is not None:
+                    session.append_assistant_final(turn.final_answer)
+                    await emit(DoneEvent(step_count=step + 1))
+                    return
+                # No tool calls and no content — treat as empty answer.
+                session.append_assistant_final("")
+                await emit(DoneEvent(step_count=step + 1))
+                return
+
+            # REACT_JSON path (legacy + provider): validate against schema
+            # and feed retry nudges through synthetic tool results.
             try:
-                parsed = json.loads(full_text)
+                parsed = json.loads(turn.raw_text)
             except json.JSONDecodeError as e:
                 session.append_synthetic_tool_result(
                     f"Your last reply was not valid JSON: {e}. Reply ONLY with the JSON object."
@@ -154,6 +233,101 @@ async def run_turn(
     finally:
         if ws_token is not None:
             _workspace_current.reset(ws_token)
+
+
+def _legacy_react_turn(full_text: str) -> TurnResult:
+    """Wrap a raw ReAct text response from a legacy ``llm=`` callable in a
+    :class:`TurnResult` shape so the unified branch logic in
+    :func:`run_turn` can consume it."""
+    return TurnResult(raw_text=full_text, finish_reason="stop")
+
+
+async def _handle_native_tool_call(
+    ptc,
+    raw_text: str,
+    session: Session,
+    registry: Registry,
+    enabled,
+    emit: EmitFn,
+    cancel: asyncio.Event,
+) -> None:
+    """Native-tools equivalent of :func:`_handle_action`.
+
+    Records the assistant's tool-call event, runs the gate flow if needed,
+    executes the tool, and records the result.
+    """
+    name = ptc.name
+    args = ptc.args or {}
+    call_id = _new_call_id()
+    raw = json.dumps({"native_tool_call": {"id": ptc.id, "name": name, "args": args},
+                       "content": raw_text})
+    session.append_assistant_tool_call(call_id, name, args, raw=raw)
+    await emit(ToolCallEvent(id=call_id, name=name, args=args))
+
+    err = registry.validate_args(name, args)
+    if err is not None:
+        msg = f"args invalid: {err}"
+        session.append_tool_result(call_id, msg)
+        await emit(ToolResultEvent(id=call_id, preview=msg, blob=None, duration_ms=0))
+        return
+
+    fs_diff = _compute_fs_diff(name, args)
+
+    ws = session.workspace
+    args_override: Optional[dict] = None
+    if ws is not None and ws.auto_approve_in_sandbox:
+        if registry.is_dangerous(name) and name not in SANDBOX_SAFE_DANGEROUS_TOOLS:
+            decision, args_override = await session.await_gate(
+                call_id, name, args, emit, fs_diff=fs_diff, timeout=300,
+            )
+            if decision == "deny":
+                msg = "User denied this tool call."
+                session.append_tool_result(call_id, msg)
+                await emit(ToolResultEvent(id=call_id, preview=msg, blob=None, duration_ms=0))
+                return
+            if decision == "always":
+                session.mark_auto_approved(name)
+    elif (
+        registry.is_dangerous(name)
+        and not session.is_auto_approved(name)
+        and not session.yolo
+    ):
+        decision, args_override = await session.await_gate(
+            call_id, name, args, emit, fs_diff=fs_diff, timeout=300,
+        )
+        if decision == "deny":
+            msg = "User denied this tool call."
+            session.append_tool_result(call_id, msg)
+            await emit(ToolResultEvent(id=call_id, preview=msg, blob=None, duration_ms=0))
+            return
+        if decision == "always":
+            session.mark_auto_approved(name)
+
+    if args_override:
+        merged = {**args, **args_override}
+        err = registry.validate_args(name, merged)
+        if err is not None:
+            msg = f"args invalid after override: {err}"
+            session.append_tool_result(call_id, msg)
+            await emit(ToolResultEvent(id=call_id, preview=msg, blob=None, duration_ms=0))
+            return
+        args = merged
+
+    started = time.time()
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(registry.execute, name, args),
+            timeout=registry.timeout_for(name),
+        )
+    except asyncio.TimeoutError:
+        result = f"tool {name!r} timed out after {registry.timeout_for(name)}s"
+    except Exception as e:
+        result = f"tool {name!r} raised {type(e).__name__}: {e}"
+    duration_ms = int((time.time() - started) * 1000)
+
+    llm_view = session.record_tool_result(call_id, str(result))
+    blob = call_id if len(str(result)) > 8 * 1024 else None
+    await emit(ToolResultEvent(id=call_id, preview=llm_view[:400], blob=blob, duration_ms=duration_ms))
 
 
 async def _handle_action(
