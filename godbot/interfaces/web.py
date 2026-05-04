@@ -1481,16 +1481,46 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
         return {"workspaces": out}
 
     @app.get("/api/sessions")
-    async def sessions_list():
-        out = []
-        for d in sorted(sessions_root.iterdir()):
+    async def sessions_list(
+        workspace: Optional[str] = None,
+        limit: Optional[int] = None,
+        pinned_only: bool = False,
+    ):
+        """List sessions with optional workspace + pin filters (sub-project 79).
+
+        Without filters: returns every session's ``{id, model, provider,
+        workspace_root, started_at, pinned}`` newest-first. With
+        ``workspace=<abs path>`` only sessions whose ``workspace_root``
+        matches are returned. ``pinned_only=true`` returns only pinned
+        sessions (sub-project 52). ``limit`` caps the count.
+        """
+        out: list[dict] = []
+        try:
+            entries = sorted(sessions_root.iterdir(), reverse=True)
+        except OSError:
+            return []
+        for d in entries:
             if not d.is_dir():
                 continue
             try:
                 s = Session.load(sessions_root, d.name)
-                out.append({"id": s.id, "model": s.model})
             except Exception:
                 continue
+            if workspace is not None and s._meta.get("workspace_root") != workspace:
+                continue
+            if pinned_only and not s.pinned:
+                continue
+            out.append({
+                "id": s.id,
+                "model": s.model,
+                "model_name": s.model_name,
+                "provider": s.provider,
+                "workspace_root": s._meta.get("workspace_root"),
+                "started_at": s._meta.get("started_at"),
+                "pinned": s.pinned,
+            })
+            if limit is not None and len(out) >= int(limit):
+                break
         return out
 
     @app.post("/api/sessions/{sid}/fork")
