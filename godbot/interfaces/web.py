@@ -9,10 +9,16 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from godbot.config import load_config
+from godbot.config import load_config, providers_to_configs
 from godbot.core.agent import run_turn
 from godbot.core.events import event_to_dict
 from godbot.core.llm import LLMClient
+from godbot.core.providers import (
+    get_provider as get_provider_factory,
+    load_providers_from_config,
+    list_registered as list_registered_providers,
+)
+from godbot.core.providers.base import ProviderConfig as ProviderConfigType
 from godbot.core.registry import DEFAULT
 from godbot.core.session import Session
 from godbot.prompts import build_system_prompt
@@ -42,6 +48,28 @@ def get_llm() -> LLMClient:
     client = LLMClient(base_url=cfg.llm.base_url, model=cfg.llm.model)
     client.probe()
     return client
+
+
+def _provider_for_session(session: Session):
+    """Resolve a :class:`Provider` for ``session`` from current config.
+
+    Reads ``[providers.<name>]`` from config.toml each call so the daemon
+    picks up edits without restart. ``None`` is returned for the default
+    "lmstudio" path so existing call sites keep using the legacy
+    :class:`LLMClient` shim — this preserves byte-for-byte backward
+    compatibility for the most common deployment.
+    """
+    name = session.provider or "lmstudio"
+    if name == "lmstudio":
+        # Special case: stay on the legacy shim so existing tests/UI keep
+        # working unchanged. The provider abstraction is identical in
+        # effect for LM Studio anyway.
+        return None
+    cfg = load_config()
+    raw = providers_to_configs(cfg.providers)
+    parsed = load_providers_from_config(raw)
+    pcfg = parsed.get(name) or ProviderConfigType(name=name)
+    return get_provider_factory(name, pcfg)
 
 
 def _ensure_queue(sid: str) -> asyncio.Queue:
@@ -90,12 +118,17 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
         async def runner():
             try:
                 cfg = load_config()
-                await run_turn(
-                    llm=llm, session=session, registry=DEFAULT, emit=emit,
+                provider = _provider_for_session(session)
+                kwargs = dict(
+                    session=session, registry=DEFAULT, emit=emit,
                     cancel=cancel, max_steps=cfg.agent.max_steps,
                     max_context=cfg.llm.max_context, system_prompt="",
                     system_prompt_builder=build_system_prompt,
                 )
+                if provider is not None:
+                    await run_turn(provider=provider, **kwargs)
+                else:
+                    await run_turn(llm=llm, **kwargs)
             finally:
                 await queue.put(None)  # sentinel
 
@@ -157,6 +190,62 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
         if ev is not None:
             ev.set()
         return {"stopped": True}
+
+    @app.get("/api/providers")
+    async def providers_list():
+        """Configured providers + their connection state.
+
+        ``configured`` mirrors the ``[providers.<name>]`` section. ``state``
+        tells the UI whether a provider is reachable; we don't probe here
+        (would block the daemon); the UI can call
+        ``/api/providers/<name>/models`` to drive a real check.
+        """
+        cfg = load_config()
+        registered = list_registered_providers()
+        configured = list(cfg.providers.items.keys())
+        out: list[dict] = []
+        for name in sorted(set(registered) | set(configured)):
+            item = cfg.providers.items.get(name)
+            entry: dict = {
+                "name": name,
+                "configured": item is not None,
+                "registered": name in registered,
+                "default_model": item.default_model if item else "auto",
+                "base_url": item.base_url if item else "",
+                "has_api_key": bool(
+                    (item and (item.api_key or (item.api_key_env and os.environ.get(item.api_key_env))))
+                ) if item else False,
+            }
+            out.append(entry)
+        return {"default": cfg.providers.default, "providers": out}
+
+    @app.get("/api/providers/{name}/models")
+    async def providers_models(name: str):
+        """List models a provider exposes. For cloud providers this returns
+        the curated set we know about (no live probe). For OpenAI-compat
+        providers we hit the configured ``/models`` endpoint."""
+        cfg = load_config()
+        raw = providers_to_configs(cfg.providers)
+        parsed = load_providers_from_config(raw)
+        pcfg = parsed.get(name) or ProviderConfigType(name=name)
+        try:
+            provider = get_provider_factory(name, pcfg)
+        except KeyError:
+            raise HTTPException(404, f"unknown provider {name!r}")
+        try:
+            models = await provider.list_models()
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}", "models": []}
+        return {
+            "models": [
+                {
+                    "id": m.id,
+                    "context_length": m.context_length,
+                    "supports_native_tools": m.supports_native_tools,
+                }
+                for m in models
+            ]
+        }
 
     @app.get("/api/tools")
     async def tools_list():
@@ -235,13 +324,27 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             body = await request.json()
         except Exception:
             pass
+        # Provider/model selection (sub-project 7). Defaults preserve legacy
+        # behaviour: lmstudio + auto + react_json (None on the session
+        # field, since None means "use the provider's preference").
+        provider = body.get("provider", "lmstudio")
+        model_name = body.get("model_name") or body.get("model") or "auto"
+        protocol = body.get("protocol")
         s = Session.create(
             sessions_root,
             model=body.get("model", "auto"),
             workspace_root=body.get("workspace"),
             auto_approve_in_sandbox=bool(body.get("auto_approve_in_sandbox", False)),
+            provider=provider,
+            model_name=model_name,
+            protocol=protocol,
         )
-        return {"session_id": s.id}
+        return {
+            "session_id": s.id,
+            "provider": s.provider,
+            "model_name": s.model_name,
+            "protocol": s.protocol,
+        }
 
     @app.get("/api/sessions")
     async def sessions_list():
@@ -265,6 +368,9 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
         return {
             "id": s.id,
             "model": s.model,
+            "provider": s.provider,
+            "model_name": s.model_name,
+            "protocol": s.protocol,
             "messages": s.messages_for_llm(max_context=0),
             "yolo": s.yolo,
             "auto_approved_tools": list(s._meta.get("auto_approved_tools", [])),

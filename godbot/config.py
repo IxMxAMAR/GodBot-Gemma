@@ -3,7 +3,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Union
+from typing import Any, Union
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -75,6 +75,32 @@ class MCPConfig:
 
 
 @dataclass
+class ProviderConfigItem:
+    """One ``[providers.<name>]`` entry from config.toml.
+
+    ``api_key_env`` reads the key from the env var of that name; ``api_key``
+    is a literal string (less secure — use only when the env-var path
+    isn't workable). ``protocol`` (optional) pins the tool-call protocol
+    for this provider regardless of the per-model heuristic.
+    """
+
+    base_url: str = ""
+    api_key: str = ""
+    api_key_env: str = ""
+    default_model: str = "auto"
+    timeout: float = 60.0
+    protocol: str = ""
+
+
+@dataclass
+class ProvidersSection:
+    """Parsed ``[providers]`` and ``[providers.<name>]`` sections."""
+
+    default: str = "lmstudio"
+    items: dict[str, ProviderConfigItem] = field(default_factory=dict)
+
+
+@dataclass
 class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
@@ -83,6 +109,7 @@ class Config:
     ui: UIConfig = field(default_factory=UIConfig)
     discord: DiscordConfig = field(default_factory=DiscordConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
+    providers: ProvidersSection = field(default_factory=ProvidersSection)
 
 
 def godbot_home() -> Path:
@@ -115,6 +142,39 @@ def default_config_text() -> str:
         "\n[discord]\n"
         'token = ""\n'
         "owner_id = 0\n"
+        "\n# Provider abstraction (sub-project 7). Each [providers.<name>]\n"
+        "# entry can be selected per-session via POST /api/sessions/new\n"
+        '# {"provider":"<name>", "model":"<id>"}.\n'
+        "[providers]\n"
+        'default = "lmstudio"\n'
+        "\n[providers.lmstudio]\n"
+        'base_url = "http://localhost:1234/v1"\n'
+        'default_model = "auto"\n'
+        "\n[providers.ollama]\n"
+        'base_url = "http://localhost:11434/v1"\n'
+        'default_model = "auto"\n'
+        "\n[providers.openai]\n"
+        'base_url = "https://api.openai.com/v1"\n'
+        'api_key_env = "OPENAI_API_KEY"\n'
+        'default_model = "gpt-4o"\n'
+        "\n[providers.anthropic]\n"
+        'api_key_env = "ANTHROPIC_API_KEY"\n'
+        'default_model = "claude-3-5-sonnet-latest"\n'
+        "\n[providers.gemini]\n"
+        'api_key_env = "GOOGLE_API_KEY"\n'
+        'default_model = "gemini-2.0-flash"\n'
+        "\n[providers.groq]\n"
+        'base_url = "https://api.groq.com/openai/v1"\n'
+        'api_key_env = "GROQ_API_KEY"\n'
+        'default_model = "llama-3.3-70b-versatile"\n'
+        "\n[providers.together]\n"
+        'base_url = "https://api.together.xyz/v1"\n'
+        'api_key_env = "TOGETHER_API_KEY"\n'
+        'default_model = "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"\n'
+        "\n[providers.openrouter]\n"
+        'base_url = "https://openrouter.ai/api/v1"\n'
+        'api_key_env = "OPENROUTER_API_KEY"\n'
+        'default_model = "anthropic/claude-3-5-sonnet"\n'
     )
 
 
@@ -149,6 +209,33 @@ def _parse_mcp(raw_mcp: dict) -> MCPConfig:
     return MCPConfig(servers=parsed)
 
 
+def _parse_providers(raw_providers: dict) -> ProvidersSection:
+    """Parse the ``[providers]`` block.
+
+    The block has a scalar ``default`` plus one sub-table per provider
+    name, e.g. ``[providers.openai]``. tomllib renders these as nested
+    dicts so we can walk the keys. Unknown / malformed entries are
+    skipped silently (matching the rest of the config loader's
+    "be liberal" stance).
+    """
+    if not isinstance(raw_providers, dict):
+        return ProvidersSection()
+    default = str(raw_providers.get("default", "lmstudio") or "lmstudio")
+    items: dict[str, ProviderConfigItem] = {}
+    for name, entry in raw_providers.items():
+        if name == "default":
+            continue
+        if not isinstance(entry, dict):
+            continue
+        try:
+            items[str(name)] = ProviderConfigItem(
+                **_filter_known(entry, ProviderConfigItem)
+            )
+        except Exception:
+            continue
+    return ProvidersSection(default=default, items=items)
+
+
 def load_config() -> Config:
     home = godbot_home()
     home.mkdir(parents=True, exist_ok=True)
@@ -164,4 +251,28 @@ def load_config() -> Config:
         ui=UIConfig(**_filter_known(raw.get("ui") or {}, UIConfig)),
         discord=DiscordConfig(**_filter_known(raw.get("discord") or {}, DiscordConfig)),
         mcp=_parse_mcp(raw.get("mcp") or {}),
+        providers=_parse_providers(raw.get("providers") or {}),
     )
+
+
+def providers_to_configs(providers: ProvidersSection) -> dict[str, Any]:
+    """Convert a parsed :class:`ProvidersSection` into the shape that
+    :func:`godbot.core.providers.load_providers_from_config` expects:
+    ``{name: {base_url, api_key, api_key_env, default_model, timeout, protocol}}``.
+    Used by the web layer to wire config-driven providers at runtime.
+    """
+    out: dict[str, Any] = {}
+    for name, item in providers.items.items():
+        entry: dict[str, Any] = {
+            "base_url": item.base_url,
+            "default_model": item.default_model,
+            "timeout": item.timeout,
+        }
+        if item.api_key:
+            entry["api_key"] = item.api_key
+        if item.api_key_env:
+            entry["api_key_env"] = item.api_key_env
+        if item.protocol:
+            entry["protocol"] = item.protocol
+        out[name] = entry
+    return out
