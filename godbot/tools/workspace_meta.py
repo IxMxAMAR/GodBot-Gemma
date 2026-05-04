@@ -105,6 +105,62 @@ def _toplevel_listing(repo: Path) -> str:
 
 
 @tool()
+def check_python_syntax(path: str = "", code: str = "") -> str:
+    """Validate that a file or snippet is syntactically valid Python (sub-project 50).
+
+    Pass exactly one of ``path`` (workspace-confined .py file) or ``code``
+    (inline source). Returns ``"ok: <label> parses cleanly"`` on success
+    or ``"[error] line L col C: <SyntaxError msg>"`` on failure.
+
+    Cheaper than ``run_python`` for "does this even parse?" sanity
+    checks — non-dangerous, no subprocess, no side effects. Useful
+    after applying a patch to confirm the file still compiles.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    if not path and not code:
+        return "[error] supply either `path` or `code`"
+    if path and code:
+        return "[error] supply only one of `path` or `code`"
+
+    body: str
+    label: str
+    if path:
+        ws = current_workspace()
+        p = _Path(path)
+        if not p.is_absolute() and ws is not None:
+            p = ws.root / p
+        try:
+            p = p.resolve()
+        except OSError as e:
+            return f"[error] cannot resolve {path!r}: {e}"
+        if ws is not None:
+            try:
+                p.relative_to(ws.root)
+            except ValueError:
+                return f"[error] {p} is outside the active workspace"
+        if not p.is_file():
+            return f"[error] not a file: {p}"
+        if p.suffix != ".py":
+            return f"[error] not a Python file: {p}"
+        try:
+            body = p.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            return f"[error] read failed: {type(e).__name__}: {e}"
+        label = str(p)
+    else:
+        body = code
+        label = "<inline>"
+
+    try:
+        ast.parse(body, filename=label)
+    except SyntaxError as e:
+        return f"[error] {label}: line {e.lineno} col {e.offset}: {e.msg}"
+    return f"ok: {label} parses cleanly"
+
+
+@tool()
 def extract_function(path: str, name: str) -> str:
     """Extract a Python function or class definition by name (sub-project 48).
 
