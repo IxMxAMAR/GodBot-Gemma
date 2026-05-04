@@ -838,6 +838,45 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             raise HTTPException(404, "no such session")
         return s.usage
 
+    @app.post("/api/sessions/{sid}/budget")
+    async def session_set_budget(sid: str, request: Request):
+        """Set or clear soft spending caps on a session (sub-project 28).
+
+        Body: ``{max_total_tokens?: int, max_usd?: float}``. Pass an empty
+        body or omit a field to leave that cap unchanged. Pass ``null`` to
+        clear that cap entirely. Both caps apply additively — the agent
+        loop bails on whichever fires first.
+        """
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        # Build the new cap set: start from existing, overlay incoming, drop nulls.
+        cur = dict(s.budget)
+        for k in ("max_total_tokens", "max_usd"):
+            if k in body:
+                cur[k] = body[k]  # may be None to clear
+        s.set_budget(
+            max_total_tokens=cur.get("max_total_tokens"),
+            max_usd=cur.get("max_usd"),
+        )
+        return s.budget
+
+    @app.get("/api/sessions/{sid}/budget")
+    async def session_get_budget(sid: str):
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        return s.budget
+
     @app.get("/api/sessions/{sid}/blobs/{call_id}")
     async def session_blob(sid: str, call_id: str, as_text: bool = False):
         """Return the full tool-result blob for a given call (sub-project 26).

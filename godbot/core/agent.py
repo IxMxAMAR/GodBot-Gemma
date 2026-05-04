@@ -197,6 +197,17 @@ async def run_turn(
                 await emit(ErrorEvent(message="cancelled", recoverable=False))
                 return
 
+            # Budget guardrail (sub-project 28). Checked before each step so
+            # the session always finishes the in-flight turn but won't start
+            # a new one once a cap is hit.
+            try:
+                over, reason = session.is_over_budget()
+            except Exception:
+                over, reason = False, ""
+            if over:
+                await emit(ErrorEvent(message=reason, recoverable=False))
+                return
+
             messages = [{"role": "system", "content": sys_prompt}] + session.messages_for_llm(max_context=max_context)
 
             async def _on_delta(t: str) -> None:

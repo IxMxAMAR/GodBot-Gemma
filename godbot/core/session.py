@@ -252,6 +252,69 @@ class Session:
         self._meta["usage"] = cur
         self._save_meta()
 
+    @property
+    def budget(self) -> dict[str, float | None]:
+        """Soft spending caps for this session (sub-project 28).
+
+        Keys: ``max_total_tokens`` and ``max_usd`` — either may be ``None``
+        meaning "no cap on this dimension". Both apply additively: the
+        session is over-budget if EITHER cap is exceeded.
+        """
+        b = self._meta.get("budget") or {}
+        return {
+            "max_total_tokens": b.get("max_total_tokens"),
+            "max_usd": b.get("max_usd"),
+        }
+
+    def set_budget(
+        self,
+        *,
+        max_total_tokens: Optional[int] = None,
+        max_usd: Optional[float] = None,
+    ) -> None:
+        """Set/clear soft spending caps. Pass None to remove a cap.
+
+        The agent loop checks :meth:`is_over_budget` before each turn and
+        bails out with an ErrorEvent when any cap is exceeded — so the
+        session always finishes the in-flight turn but won't start a
+        new one once the cap is hit.
+        """
+        b: dict[str, Any] = {}
+        if max_total_tokens is not None:
+            b["max_total_tokens"] = int(max_total_tokens)
+        if max_usd is not None:
+            b["max_usd"] = float(max_usd)
+        self._meta["budget"] = b
+        self._save_meta()
+
+    def is_over_budget(self) -> tuple[bool, str]:
+        """Return ``(over, reason)``.
+
+        Reason is empty string when ``over`` is False; otherwise a short
+        human-readable explanation that the agent loop can surface as an
+        ErrorEvent message.
+        """
+        b = self.budget
+        u = self.usage
+        cap_tokens = b.get("max_total_tokens")
+        if cap_tokens is not None and u["total_tokens"] >= int(cap_tokens):
+            return True, f"token budget exceeded ({u['total_tokens']} >= {cap_tokens})"
+        cap_usd = b.get("max_usd")
+        if cap_usd is not None:
+            try:
+                from godbot.core.pricing import compute_cost
+                cost = compute_cost(
+                    provider=self.provider,
+                    model=self.model_name or self.model,
+                    input_tokens=u["input_tokens"],
+                    output_tokens=u["output_tokens"],
+                )
+                if cost.matched and cost.usd >= float(cap_usd):
+                    return True, f"cost budget exceeded (${cost.usd:.4f} >= ${cap_usd})"
+            except Exception:
+                pass  # pricing failures don't block the session
+        return False, ""
+
     def _save_meta(self) -> None:
         self._write_meta(self.dir, self._meta)
 
