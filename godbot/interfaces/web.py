@@ -1968,6 +1968,42 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             "has_more": offset + limit < total,
         }
 
+    @app.get("/api/sessions/{sid}/transcript")
+    async def session_transcript(sid: str, include_tools: bool = False):
+        """Plain-text conversation transcript (sub-project 80).
+
+        Returns ``text/plain`` with simple ``Role: content`` lines, blank
+        line separated. Strictly conversational — by default skips
+        ``assistant_tool_call`` / ``tool_result`` events; pass
+        ``include_tools=true`` to interleave them.
+
+        Cleaner than the full markdown export when you just want the
+        gist for sharing or pasting into another chat.
+        """
+        from fastapi.responses import PlainTextResponse
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        lines: list[str] = []
+        for ev in s._events():
+            t = ev.get("type")
+            if t == "user":
+                lines.append(f"User: {ev.get('content', '')}")
+                lines.append("")
+            elif t == "assistant_final":
+                lines.append(f"Assistant: {ev.get('content', '')}")
+                lines.append("")
+            elif include_tools and t == "assistant_tool_call":
+                args = ev.get("args") or {}
+                lines.append(f"Tool call: {ev.get('name', '?')}({args})")
+                lines.append("")
+            elif include_tools and t == "tool_result":
+                lines.append(f"Tool result: {(ev.get('content') or '')[:500]}")
+                lines.append("")
+        text = "\n".join(lines).rstrip() + "\n"
+        return PlainTextResponse(text, media_type="text/plain; charset=utf-8")
+
     @app.get("/api/sessions/{sid}/explain")
     async def session_explain(sid: str):
         """Concise auto-label for a session (sub-project 61).
