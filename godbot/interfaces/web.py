@@ -201,6 +201,18 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
 
     app = FastAPI(title="GodBot")
 
+    # Allow browser surfaces (Tauri WebView, browser-based UIs) to call us.
+    # Daemon binds 127.0.0.1 only, so wide-open CORS here is bounded to the
+    # local machine.
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     @app.get("/api/health")
     async def health():
         return {"status": "ok"}
