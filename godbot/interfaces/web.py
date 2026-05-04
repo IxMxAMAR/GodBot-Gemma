@@ -2081,6 +2081,25 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             "events_imported": kept,
         }
 
+    @app.get("/api/sessions/{sid}/messages/{idx}")
+    async def session_message_one(sid: str, idx: int):
+        """Get one message by 0-based index (sub-project 90).
+
+        Companion to GET /api/sessions/{sid}/messages — that one paginates,
+        this one fetches a single turn for "show me turn 7" navigation.
+        Returns ``{role, content, index}`` or 404 if the index is out of
+        range.
+        """
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        msgs = s.messages_for_llm(max_context=0)
+        if idx < 0 or idx >= len(msgs):
+            raise HTTPException(404, f"index out of range (0..{len(msgs) - 1})")
+        m = msgs[idx]
+        return {"role": m["role"], "content": m["content"], "index": idx}
+
     @app.get("/api/sessions/{sid}/messages")
     async def session_messages(sid: str, offset: int = 0, limit: int = 50, role: Optional[str] = None):
         """Paginated access to a session's message log (sub-project 72).
