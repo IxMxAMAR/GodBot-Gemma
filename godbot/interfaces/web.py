@@ -578,6 +578,84 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
 
         return EventSourceResponse(gen())
 
+    @app.post("/api/complete/stream")
+    async def inline_complete_stream(request: Request):
+        """Streaming inline completion (sub-project 29).
+
+        Same body shape as POST /api/complete; returns an SSE stream of
+        ``chunk`` events whose ``data`` is a JSON object ``{"text": "..."}``
+        followed by a final ``done`` event with ``{"model": "..."}``.
+
+        Better UX for ghost text: the caller can render characters as
+        they arrive instead of waiting for the full completion. Falls
+        back through the same provider-resolution path as the
+        non-streaming endpoint; unsupported providers (Anthropic /
+        Gemini) yield HTTP 501 before any SSE bytes.
+        """
+        from sse_starlette.sse import EventSourceResponse
+        from godbot.core.completion import stream_completion
+
+        body = await request.json()
+        prefix = str(body.get("prefix", ""))
+        suffix = str(body.get("suffix", ""))
+        language = body.get("language")
+        if language is not None and not isinstance(language, str):
+            raise HTTPException(400, "language must be a string")
+        max_tokens = int(body.get("max_tokens", 64))
+
+        cfg = load_config()
+        provider_name = (body.get("provider") or cfg.providers.default or "lmstudio")
+        item = cfg.providers.items.get(provider_name)
+        if item is None:
+            raise HTTPException(
+                400, f"provider {provider_name!r} not configured in [providers.{provider_name}]",
+            )
+        model = body.get("model") or item.default_model or "auto"
+        if model == "auto":
+            try:
+                pcfg = ProviderConfigType(
+                    name=provider_name,
+                    base_url=item.base_url,
+                    api_key=item.api_key
+                    or (item.api_key_env and os.environ.get(item.api_key_env, "") or ""),
+                    default_model=item.default_model,
+                )
+                provider_inst = get_provider_factory(provider_name, pcfg)
+                resolved = await provider_inst.select_model("auto")
+                model = resolved.id
+            except Exception as e:
+                raise HTTPException(503, f"could not resolve model: {e}")
+
+        api_key = item.api_key
+        if not api_key and item.api_key_env:
+            api_key = os.environ.get(item.api_key_env, "")
+
+        # Pre-flight the support check so unsupported providers fail before
+        # we open the SSE stream (cleaner UX than emitting an error event).
+        from godbot.core.completion import _is_openai_compatible
+        if not _is_openai_compatible(provider_name):
+            raise HTTPException(
+                501, f"provider {provider_name!r} not yet supported for streaming completion",
+            )
+
+        async def gen():
+            try:
+                async for chunk in stream_completion(
+                    prefix=prefix, suffix=suffix, language=language,
+                    provider_name=provider_name, base_url=item.base_url,
+                    api_key=api_key, model=model, max_tokens=max_tokens,
+                ):
+                    yield {"event": "chunk", "data": json.dumps({"text": chunk})}
+            except Exception as e:
+                yield {
+                    "event": "error",
+                    "data": json.dumps({"message": f"{type(e).__name__}: {e}"}),
+                }
+                return
+            yield {"event": "done", "data": json.dumps({"model": model})}
+
+        return EventSourceResponse(gen())
+
     @app.post("/api/complete")
     async def inline_complete(request: Request):
         """Cursor-style inline completion (sub-project 12).

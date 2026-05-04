@@ -165,6 +165,79 @@ async def _post_chat_completion(
     return str(content), r.status_code
 
 
+async def stream_completion(
+    *,
+    prefix: str,
+    suffix: str = "",
+    language: Optional[str] = None,
+    provider_name: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    timeout: float = 30.0,
+):
+    """Async generator: yield completion text chunks as they arrive (sub-project 29).
+
+    Same prompt + provider semantics as :func:`complete_text` but uses
+    OpenAI-compatible Chat Completions in streaming mode. Yields
+    ``str`` chunks; the caller can concatenate or render incrementally.
+    Raises :class:`ValueError` for unsupported providers.
+
+    The first chunk that arrives is left raw (no prefix-echo strip),
+    which is fine for inline ghost text — the user typed the prefix,
+    so the model is unlikely to echo it. For "give me the full
+    completion", call :func:`complete_text` instead.
+    """
+    if not _is_openai_compatible(provider_name):
+        raise ValueError(
+            f"provider {provider_name!r} not yet supported for inline completion"
+        )
+    if not prefix and not suffix:
+        return
+
+    prefix_t, suffix_t = _trim_context(prefix, suffix)
+    user_msg = _build_user_message(prefix_t, suffix_t, language)
+    messages = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": user_msg},
+    ]
+
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key or 'lm-studio'}"}
+    body = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0.1,
+        "stream": True,
+    }
+    import json as _json
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("POST", url, headers=headers, json=body) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data_part = line[5:].strip()
+                if data_part == "[DONE]":
+                    return
+                try:
+                    chunk = _json.loads(data_part)
+                except _json.JSONDecodeError:
+                    continue
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                text_chunk = delta.get("content")
+                if text_chunk:
+                    yield text_chunk
+
+
 async def complete_text(
     *,
     prefix: str,
