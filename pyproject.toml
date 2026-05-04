@@ -39,6 +39,9 @@ dev = [
 discord = [
     "discord.py>=2.4",
 ]
+providers = [
+    "anthropic>=0.40",
+]
 
 [project.scripts]
 godbot-web = "godbot.interfaces.web:main"

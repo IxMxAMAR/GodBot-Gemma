@@ -28,6 +28,46 @@ Local agent harness for Gemma 3n E4B (or any Gemma) served by LM Studio. ReAct +
 
 `~/.godbot/config.toml` is created on first run. Tweak model preference, max_steps, port, theme, RAG settings there.
 
+## Providers (any model that can do tool calls)
+
+GodBot's daemon talks to LLMs through a provider abstraction (sub-project 7). Out of the box every session defaults to the legacy LM Studio path with ReAct + JSON-schema tool calls — that is byte-for-byte identical to v0.1. To use a different backend, pick one in `[providers.<name>]` and select it per session.
+
+Supported providers:
+
+| Name | Class | Notes |
+|---|---|---|
+| `lmstudio` (default) | `GenericOpenAICompatProvider` | OpenAI-compatible at `localhost:1234/v1`. ReAct + JSON-schema. |
+| `ollama` | `GenericOpenAICompatProvider` | OpenAI-compat shim at `localhost:11434/v1`. |
+| `openai` | `GenericOpenAICompatProvider` | Native `tools=[...]` for GPT-4o/etc. Set `OPENAI_API_KEY`. |
+| `anthropic` | `AnthropicProvider` | Native `tool_use` blocks. Set `ANTHROPIC_API_KEY`. |
+| `gemini` | `GeminiProvider` | Native `functionDeclarations` via raw httpx (no Google SDK dep). Set `GOOGLE_API_KEY`. |
+| `groq`, `together`, `openrouter`, `cerebras`, `mistral`, `fireworks`, `vllm` | `GenericOpenAICompatProvider` | Drop-in OpenAI-compat — set the matching `*_API_KEY` env var. |
+| `openai_compat` | `GenericOpenAICompatProvider` | For custom self-hosted endpoints — set `base_url` and (optionally) `api_key`. |
+
+Per-session selection:
+
+```bash
+curl -X POST http://localhost:7878/api/sessions/new \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"anthropic","model_name":"claude-3-5-sonnet-latest"}'
+```
+
+Two tool-call protocols are auto-selected per model and overridable per-session:
+
+- `react_json` — ReAct envelope + JSON-schema constrained output (legacy Gemma path; works on any model but slower)
+- `native` — Claude `tool_use` / OpenAI `tool_calls` / Gemini `functionCall`
+
+The provider chooses based on the model id (small/legacy models default to ReAct; cloud frontier models default to native). Pin manually with `protocol = "react_json"` or `protocol = "native"` either in `[providers.<name>]` or the session-create body.
+
+API endpoints added:
+
+- `GET /api/providers` — list configured providers + connection state
+- `GET /api/providers/<name>/models` — list available models for a provider
+- `POST /api/sessions/new` — accepts `provider`, `model_name`, `protocol` in body
+- `GET /api/sessions/<sid>` — response includes `provider`, `model_name`, `protocol`
+
+The optional `[providers]` extra in `pyproject.toml` declares `anthropic>=0.40` (used only as a future SDK convenience; the wire path is raw httpx). Gemini stays SDK-free.
+
 ## Notes
 
 - Sessions land in `<cwd>/sessions/`. Don't put it inside OneDrive — fsync gets slow.
