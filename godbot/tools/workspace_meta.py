@@ -105,6 +105,66 @@ def _toplevel_listing(repo: Path) -> str:
 
 
 @tool()
+def validate_json(text: str = "", path: str = "") -> str:
+    """Validate that ``text`` (or the contents of ``path``) is well-formed JSON.
+
+    Returns ``"ok: <type> with N keys/items"`` on success, or
+    ``"[error] line L col C: <msg>"`` on parse failure. Use this before
+    writing a JSON config file or sending a JSON payload through a
+    tool that doesn't validate its inputs.
+
+    Pass exactly one of ``text`` (inline) or ``path`` (workspace-confined
+    file). Non-dangerous, read-only.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    if not text and not path:
+        return "[error] supply either `text` or `path`"
+    if text and path:
+        return "[error] supply only one of `text` or `path`"
+
+    body: str
+    label: str
+    if path:
+        ws = current_workspace()
+        p = _Path(path)
+        if not p.is_absolute() and ws is not None:
+            p = ws.root / p
+        try:
+            p = p.resolve()
+        except OSError as e:
+            return f"[error] cannot resolve {path!r}: {e}"
+        if ws is not None:
+            try:
+                p.relative_to(ws.root)
+            except ValueError:
+                return f"[error] {p} is outside the active workspace"
+        if not p.is_file():
+            return f"[error] not a file: {p}"
+        try:
+            body = p.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            return f"[error] read failed: {type(e).__name__}: {e}"
+        label = str(p)
+    else:
+        body = text
+        label = "<inline>"
+
+    try:
+        parsed = _json.loads(body)
+    except _json.JSONDecodeError as e:
+        return f"[error] {label}: line {e.lineno} col {e.colno}: {e.msg}"
+
+    kind = type(parsed).__name__
+    if isinstance(parsed, dict):
+        return f"ok: {label} → object with {len(parsed)} key(s)"
+    if isinstance(parsed, list):
+        return f"ok: {label} → array of {len(parsed)} item(s)"
+    return f"ok: {label} → {kind} ({parsed!r})"
+
+
+@tool()
 def count_tokens(text: str = "", path: str = "") -> str:
     """Estimate token count for a piece of text or a file (sub-project 39).
 
