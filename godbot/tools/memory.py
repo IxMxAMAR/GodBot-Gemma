@@ -161,25 +161,149 @@ def recall_notes(query: str = "", top_k: int = 10, all_workspaces: bool = False)
     )
 
 
-def load_recent_workspace_notes(workspace: str, limit: int = 5) -> str:
-    """Return a formatted block of the most-recent notes for `workspace`.
-
-    Used by the agent loop to inject prior-session context into the system
-    prompt at the start of a new session in this workspace. Returns an empty
-    string if no relevant notes exist.
-    """
-    notes = []
+def _notes_for_workspace(workspace: str) -> list[dict]:
+    """Read every note matching `workspace`, sorted by timestamp ascending."""
+    out: list[dict] = []
     for p in sorted(_notes_dir().glob("*.json")):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             continue
         if data.get("workspace") == workspace:
-            notes.append(data)
-    notes = notes[-limit:]
+            out.append(data)
+    return out
+
+
+def load_recent_workspace_notes(workspace: str, limit: int = 5) -> str:
+    """Return a formatted block of recent notes for `workspace`.
+
+    All notes tagged ``pinned`` are ALWAYS included (sticky-to-top, capped at
+    5 to keep the prompt bounded), followed by the most-recent unpinned notes
+    until the total reaches ``limit``. Used by the agent loop to inject
+    prior-session context into the system prompt at the start of a new
+    session. Returns an empty string when no relevant notes exist.
+    """
+    workspace_notes = _notes_for_workspace(workspace)
+    if not workspace_notes:
+        return ""
+
+    pinned = [n for n in workspace_notes if "pinned" in (n.get("tags") or [])]
+    unpinned = [n for n in workspace_notes if "pinned" not in (n.get("tags") or [])]
+
+    # Cap pinned to 5 to bound prompt size on workspaces that accumulate many
+    # pins — matches the Risk row in the spec.
+    pinned = pinned[-5:]
+
+    remaining = max(0, limit - len(pinned))
+    tail = unpinned[-remaining:] if remaining else []
+
+    notes: list[dict] = list(pinned) + list(tail)
     if not notes:
         return ""
-    body = "\n\n".join(
-        f"- [{nt['timestamp']}] {nt['content']}" for nt in notes
-    )
+
+    def _fmt(nt: dict) -> str:
+        marker = " [pinned]" if "pinned" in (nt.get("tags") or []) else ""
+        return f"- [{nt['timestamp']}]{marker} {nt['content']}"
+
+    body = "\n\n".join(_fmt(nt) for nt in notes)
     return f"<workspace_memory>\nRecent notes from this workspace ({workspace}):\n{body}\n</workspace_memory>"
+
+
+def _find_note_path_by_timestamp(timestamp: str) -> Path | None:
+    """Locate the on-disk file for a note whose record ``timestamp`` matches.
+
+    The file name uses the unique form (``ts`` or ``ts_<n>`` for collisions),
+    which differs from the ``timestamp`` field in the record body. We scan
+    files because the suffix-disambiguator means filename != timestamp.
+    """
+    for p in sorted(_notes_dir().glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("timestamp") == timestamp:
+            return p
+    return None
+
+
+def set_pin(timestamp: str, pinned: bool) -> bool:
+    """Add or remove the ``pinned`` tag on a note. Returns True on success.
+
+    RAG metadata is best-effort updated to keep the pin tag visible to
+    similarity search; failures are silently swallowed because the note's
+    on-disk truth is the source of authority.
+    """
+    p = _find_note_path_by_timestamp(timestamp)
+    if p is None:
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    tags = list(data.get("tags") or [])
+    if pinned and "pinned" not in tags:
+        tags.append("pinned")
+    elif not pinned and "pinned" in tags:
+        tags = [t for t in tags if t != "pinned"]
+    data["tags"] = tags
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    # Best-effort RAG sync — never let a RAG hiccup break a UI pin click.
+    try:
+        from godbot.core.rag import RagStore
+
+        home = Path(os.environ.get("GODBOT_HOME", str(Path.home() / ".godbot")))
+        notes_coll_dir = home / "rag" / "_notes"
+        if notes_coll_dir.exists():
+            store = RagStore(root=home / "rag", collection="_notes")
+            # File stem matches save_note's `uniq_ts` record id. update() on
+            # the underlying chroma collection is the right primitive — patch
+            # only the metadata.tags field.
+            store._coll.update(
+                ids=[p.stem],
+                metadatas=[{"tags": ",".join(tags)}],
+            )
+    except Exception:
+        pass
+    return True
+
+
+def delete_note(timestamp: str) -> bool:
+    """Delete a note file by its timestamp. RAG entry removed best-effort."""
+    p = _find_note_path_by_timestamp(timestamp)
+    if p is None:
+        return False
+    stem = p.stem
+    try:
+        p.unlink()
+    except Exception:
+        return False
+    try:
+        from godbot.core.rag import RagStore
+
+        home = Path(os.environ.get("GODBOT_HOME", str(Path.home() / ".godbot")))
+        notes_coll_dir = home / "rag" / "_notes"
+        if notes_coll_dir.exists():
+            store = RagStore(root=home / "rag", collection="_notes")
+            store._coll.delete(ids=[stem])
+    except Exception:
+        pass
+    return True
+
+
+def list_notes(workspace: str | None = None, query: str = "") -> list[dict]:
+    """Return notes (newest first), optionally scoped to ``workspace`` and
+    filtered by case-insensitive substring against the content."""
+    out: list[dict] = []
+    for p in sorted(_notes_dir().glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if workspace is not None and data.get("workspace") != workspace:
+            continue
+        if query and query.lower() not in (data.get("content") or "").lower():
+            continue
+        out.append(data)
+    # Newest first.
+    out.reverse()
+    return out
