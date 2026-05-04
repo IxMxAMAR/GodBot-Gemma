@@ -908,6 +908,70 @@ def csv_summary(path: str, sample_rows: int = 5) -> str:
 
 
 @tool()
+def sort_lines(text: str, reverse: bool = False, numeric: bool = False) -> str:
+    """Sort lines of inline text (sub-project 84).
+
+    ``reverse=True`` flips the order. ``numeric=True`` sorts by leading
+    integer (lines without a leading number sort to the bottom). Lines
+    are split on '\\n' and rejoined; trailing newline is preserved.
+
+    Useful when the agent has stitched together output and wants it
+    canonical for diffing or display.
+    """
+    if not isinstance(text, str):
+        return "[error] text must be a string"
+    had_trailing_nl = text.endswith("\n")
+    lines = text.splitlines()
+    if numeric:
+        def _key(line: str) -> tuple[int, int, str]:
+            stripped = line.lstrip()
+            i = 0
+            while i < len(stripped) and (stripped[i].isdigit() or (i == 0 and stripped[i] == "-")):
+                i += 1
+            try:
+                num = int(stripped[:i]) if i else None
+            except ValueError:
+                num = None
+            return (1 if num is None else 0, num if num is not None else 0, line)
+        lines.sort(key=_key, reverse=reverse)
+    else:
+        lines.sort(reverse=reverse)
+    out = "\n".join(lines)
+    if had_trailing_nl:
+        out += "\n"
+    return out
+
+
+@tool()
+def unique_lines(text: str, preserve_order: bool = True) -> str:
+    """Return distinct lines from inline text (sub-project 84).
+
+    ``preserve_order=True`` (default) keeps first-occurrence ordering;
+    ``False`` returns unique lines sorted alphabetically. Trailing
+    newline behavior matches the input.
+
+    Useful for dedup'ing log output the agent has stitched together.
+    """
+    if not isinstance(text, str):
+        return "[error] text must be a string"
+    had_trailing_nl = text.endswith("\n")
+    lines = text.splitlines()
+    if preserve_order:
+        seen: set[str] = set()
+        kept: list[str] = []
+        for line in lines:
+            if line not in seen:
+                seen.add(line)
+                kept.append(line)
+    else:
+        kept = sorted(set(lines))
+    out = "\n".join(kept)
+    if had_trailing_nl:
+        out += "\n"
+    return out
+
+
+@tool()
 def text_replace(text: str, old: str, new: str, count: int = -1) -> str:
     """Replace ``old`` with ``new`` in ``text`` (sub-project 77).
 
