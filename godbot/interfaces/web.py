@@ -1031,6 +1031,75 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
                 continue
         return out
 
+    @app.get("/api/sessions/search")
+    async def sessions_search(q: str, workspace: Optional[str] = None, limit: int = 20):
+        """Substring search across session transcripts (sub-project 33).
+
+        Walks every session's events.jsonl, finds messages containing
+        the query (case-insensitive), and returns the first match per
+        session as ``{id, started_at, model, snippet, role}``. Results
+        are ordered by started_at desc.
+
+        ``workspace`` (optional) limits the search to sessions whose
+        ``workspace_root`` matches that absolute path.
+
+        Linear-walk impl — fine for hundreds of sessions; users with
+        thousands should reach for the RAG search instead.
+        """
+        if not q or not isinstance(q, str):
+            raise HTTPException(400, "q (query string) required")
+        q_lower = q.lower()
+        out: list[dict] = []
+        if not sessions_root.exists():
+            return {"matches": []}
+        for sdir in sorted(sessions_root.iterdir(), reverse=True):
+            if not sdir.is_dir():
+                continue
+            try:
+                s = Session.load(sessions_root, sdir.name)
+            except Exception:
+                continue
+            if workspace is not None:
+                ws_root = s._meta.get("workspace_root")
+                if ws_root != workspace:
+                    continue
+            match: Optional[dict] = None
+            for ev in s._events():
+                t = ev.get("type")
+                # We only search human-readable content, not raw JSON envelopes.
+                content = ""
+                role = ""
+                if t == "user":
+                    content = ev.get("content", "")
+                    role = "user"
+                elif t == "assistant_final":
+                    content = ev.get("content", "")
+                    role = "assistant"
+                elif t == "tool_result":
+                    content = ev.get("content", "")
+                    role = "tool"
+                else:
+                    continue
+                if q_lower in content.lower():
+                    # Build a snippet centred on the first hit (capped).
+                    idx = content.lower().find(q_lower)
+                    start = max(0, idx - 40)
+                    end = min(len(content), idx + len(q) + 40)
+                    snippet = ("…" if start > 0 else "") + content[start:end] + ("…" if end < len(content) else "")
+                    match = {
+                        "id": s.id,
+                        "started_at": s._meta.get("started_at"),
+                        "model": s.model_name or s.model,
+                        "snippet": snippet,
+                        "role": role,
+                    }
+                    break
+            if match:
+                out.append(match)
+            if len(out) >= int(limit):
+                break
+        return {"matches": out}
+
     @app.get("/api/sessions/{sid}")
     async def session_get(sid: str):
         try:
