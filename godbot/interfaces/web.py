@@ -904,6 +904,47 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
     async def health():
         return {"status": "ok"}
 
+    @app.post("/api/cost/estimate")
+    async def cost_estimate(request: Request):
+        """Pre-flight cost estimator (sub-project 36).
+
+        Body: ``{provider: str, model: str, input_tokens: int,
+        output_tokens: int}``. Returns the same shape as
+        ``GET /api/sessions/{sid}/cost`` — but for hypothetical inputs
+        rather than a recorded session.
+
+        Useful for "before I send a 50k-token context, what will it cost?"
+        and Studio's pre-send price hint. Local providers always return
+        $0; unknown (provider, model) returns matched=false with $0.
+        """
+        from godbot.core.pricing import compute_cost
+
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        provider = body.get("provider")
+        model = body.get("model")
+        if not provider or not isinstance(provider, str):
+            raise HTTPException(400, "provider (str) required")
+        if not model or not isinstance(model, str):
+            raise HTTPException(400, "model (str) required")
+        try:
+            inp = int(body.get("input_tokens", 0))
+            out = int(body.get("output_tokens", 0))
+        except (ValueError, TypeError):
+            raise HTTPException(400, "input_tokens and output_tokens must be integers")
+        if inp < 0 or out < 0:
+            raise HTTPException(400, "token counts must be non-negative")
+        cost = compute_cost(
+            provider=provider, model=model,
+            input_tokens=inp, output_tokens=out,
+        )
+        return cost.to_dict()
+
     @app.get("/api/stats")
     async def stats():
         """Aggregate metrics across all sessions on disk (sub-project 32).
