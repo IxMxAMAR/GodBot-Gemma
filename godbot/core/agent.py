@@ -112,11 +112,31 @@ async def run_turn(
     react_schema = build_react_schema(tool_schemas)
     native_tool_schemas = build_native_tool_schemas(tool_schemas, descriptions)
 
+    # Plan-mode detection (sub-project 10.4): if the most recent user message
+    # starts with `/plan `, swap the system prompt for a planning-only variant
+    # that forbids tool calls and demands a JSON-encoded checklist in
+    # `final_answer`. Detection is strict-prefix to avoid false positives on
+    # casual chat ("plan an outline").
+    from godbot.prompts import is_plan_request, build_plan_system_prompt
+
+    plan_mode = False
+    last_user_msg = next(
+        (ev["content"] for ev in reversed(list(session._events())) if ev.get("type") == "user"),
+        None,
+    )
+    if last_user_msg is not None and is_plan_request(last_user_msg):
+        plan_mode = True
+
     # Build the system prompt from the filtered tool subset so the model never
     # sees catalog entries that the schema enum would reject anyway. Falls
     # back to the static `system_prompt` string for back-compat with callers
-    # that don't pass a builder.
-    sys_prompt = system_prompt_builder(enabled) if system_prompt_builder is not None else system_prompt
+    # that don't pass a builder. Plan mode overrides the builder.
+    if plan_mode:
+        sys_prompt = build_plan_system_prompt(enabled)
+    elif system_prompt_builder is not None:
+        sys_prompt = system_prompt_builder(enabled)
+    else:
+        sys_prompt = system_prompt
 
     # Activate the workspace contextvar for the duration of the turn so
     # tools running in worker threads (asyncio.to_thread) inherit it.

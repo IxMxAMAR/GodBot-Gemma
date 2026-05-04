@@ -59,3 +59,66 @@ def render_tool_catalog(tools: list[ToolSpec]) -> str:
 
 def build_system_prompt(tools: list[ToolSpec]) -> str:
     return "\n\n".join([ROLE_CONTRACT.rstrip(), render_tool_catalog(tools), REACT_EXAMPLES.rstrip()])
+
+
+PLAN_CONTRACT = """\
+You are GodBot in PLAN MODE. The user has prefixed their request with `/plan`.
+
+Your job in this turn is to produce a structured task checklist — NOT to do the work.
+Do not invoke any tools. Reply with EXACTLY ONE JSON object using the ReAct schema:
+
+  {"thought": "<brief reasoning>", "final_answer": "<JSON-encoded plan>"}
+
+The `final_answer` field MUST itself be a JSON-encoded string of this shape:
+
+  {
+    "plan": {
+      "goal": "<one-sentence restatement of the user's goal>",
+      "tasks": [
+        {"id": 1, "title": "<short imperative task>", "status": "pending"},
+        {"id": 2, "title": "...", "status": "pending"}
+      ]
+    }
+  }
+
+Rules:
+- 3 to 8 tasks; each title under 80 characters; imperative voice ("Read X", "Write Y").
+- Order tasks so that completing them in sequence accomplishes the goal.
+- Do NOT use the `action` field — plan mode emits the plan as the FINAL turn.
+- Tools are still listed below for reference, but DO NOT call them in this turn.
+"""
+
+
+PLAN_EXAMPLE = """\
+Plan-mode example:
+  USER: /plan rewrite the README to mention the new memory panel
+  ASSISTANT: {"thought": "I need to read the existing README, draft new sections, and write back.",
+              "final_answer": "{\\"plan\\": {\\"goal\\": \\"Rewrite README to document the memory panel\\", \\"tasks\\": [{\\"id\\": 1, \\"title\\": \\"Read current README.md\\", \\"status\\": \\"pending\\"}, {\\"id\\": 2, \\"title\\": \\"Identify section for memory panel\\", \\"status\\": \\"pending\\"}, {\\"id\\": 3, \\"title\\": \\"Write the new section\\", \\"status\\": \\"pending\\"}, {\\"id\\": 4, \\"title\\": \\"Save updated README.md\\", \\"status\\": \\"pending\\"}]}}"}
+"""
+
+
+def build_plan_system_prompt(tools: list[ToolSpec]) -> str:
+    """System prompt variant for `/plan` requests.
+
+    Same tool catalog as the regular prompt (the agent may need to know
+    available tools to phrase tasks well), but the role contract is replaced
+    with PLAN_CONTRACT, which forbids tool calls for this turn and demands a
+    JSON-encoded plan in `final_answer`.
+    """
+    return "\n\n".join([
+        PLAN_CONTRACT.rstrip(),
+        render_tool_catalog(tools),
+        PLAN_EXAMPLE.rstrip(),
+    ])
+
+
+PLAN_PREFIX = "/plan "
+
+
+def is_plan_request(user_message: str) -> bool:
+    """True iff `user_message` is a plan-mode trigger.
+
+    Strict prefix match on `/plan ` (with the trailing space) so casual
+    chat like "let's plan an outline" never accidentally enters plan mode.
+    """
+    return user_message.startswith(PLAN_PREFIX)
