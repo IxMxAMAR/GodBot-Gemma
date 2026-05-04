@@ -32,19 +32,42 @@ def _host_is_blocked(url: str) -> bool:
     return any(host in lowered for host in _BLOCKED_HOSTS)
 
 
+def _respx_is_active() -> bool:
+    """Return True if respx is currently patching the HTTP stack.
+
+    respx subclasses ``Mocker`` push ``unittest.mock.patch`` objects onto a
+    class-level ``_patches`` list while active (specifically on
+    ``HTTPCoreMocker``, which is the deeper subclass that actually
+    intercepts ``httpcore``). Walk the subclass tree so we catch it
+    regardless of where in the hierarchy patches landed.
+    """
+    try:
+        from respx.mocks import Mocker
+        stack = list(Mocker.__subclasses__())
+        while stack:
+            cls = stack.pop()
+            if getattr(cls, "_patches", None):
+                return True
+            stack.extend(cls.__subclasses__())
+    except Exception:
+        pass
+    return False
+
+
 @pytest.fixture(autouse=True)
 def _block_live_cloud_requests(monkeypatch, request):
     """Fail any test that issues a real HTTP request to a known cloud host.
 
     Tests that need to mock cloud endpoints decorate themselves with
-    ``@respx.mock`` (or use the respx fixture); respx intercepts at the
-    transport layer, so matched calls never trip this guard.
+    ``@respx.mock`` (or use the respx fixture); when respx is active we
+    let the request through so respx can match it. Only un-mocked calls
+    to a blocked host trip the guard.
     """
     real_send = httpx.HTTPTransport.handle_request
     real_async_send = httpx.AsyncHTTPTransport.handle_async_request
 
     def guarded(self, req, *a, **k):
-        if _host_is_blocked(str(req.url)):
+        if _host_is_blocked(str(req.url)) and not _respx_is_active():
             raise AssertionError(
                 f"live cloud request blocked: {req.method} {req.url} "
                 f"(test {request.node.nodeid}). Use @respx.mock."
@@ -52,7 +75,7 @@ def _block_live_cloud_requests(monkeypatch, request):
         return real_send(self, req, *a, **k)
 
     async def guarded_async(self, req, *a, **k):
-        if _host_is_blocked(str(req.url)):
+        if _host_is_blocked(str(req.url)) and not _respx_is_active():
             raise AssertionError(
                 f"live cloud request blocked: {req.method} {req.url} "
                 f"(test {request.node.nodeid}). Use @respx.mock."
