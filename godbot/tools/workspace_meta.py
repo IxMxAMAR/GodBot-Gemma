@@ -105,6 +105,44 @@ def _toplevel_listing(repo: Path) -> str:
 
 
 @tool()
+def tool_help(name: str = "") -> str:
+    """Introspect the tool catalog (sub-project 37).
+
+    With ``name=""`` (default), returns one line per registered tool:
+    ``name [DANGEROUS] — first line of docstring``. Useful when the
+    agent wants to re-check what's available without re-reading the
+    full system prompt.
+
+    With a specific tool name, returns the full description plus the
+    JSON schema of its arguments. ``[error]`` lines are returned for
+    unknown names.
+
+    Always non-dangerous. Read-only.
+    """
+    from godbot.core.registry import DEFAULT
+    import json as _json
+
+    if not name:
+        lines = ["Available tools:"]
+        for spec in sorted(DEFAULT.all(), key=lambda t: t.name):
+            flag = " [DANGEROUS]" if spec.dangerous else ""
+            lines.append(f"  {spec.name}{flag} — {spec.description}")
+        return "\n".join(lines)
+
+    spec = DEFAULT.spec(name)
+    if spec is None:
+        return f"[error] unknown tool {name!r}"
+    flag = " [DANGEROUS]" if spec.dangerous else ""
+    schema_pretty = _json.dumps(spec.schema, indent=2)
+    return (
+        f"{spec.name}{flag}\n"
+        f"description: {spec.description}\n"
+        f"timeout: {spec.timeout}s\n"
+        f"args schema:\n{schema_pretty}"
+    )
+
+
+@tool()
 def workspace_context() -> str:
     """At-a-glance summary of the active workspace (sub-project 30).
 
