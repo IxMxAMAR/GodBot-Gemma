@@ -1699,6 +1699,75 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             raise HTTPException(404, "no such session")
         return s.usage
 
+    @app.post("/api/sessions/import")
+    async def session_import(request: Request):
+        """Import a session from a previously-exported JSON blob (sub-project 51).
+
+        Body is the same shape ``GET /api/sessions/{sid}/export`` returns
+        in JSON mode (id is replaced with a fresh one — the export's id
+        is recorded in the new session's meta as ``imported_from``).
+        Provider/model/workspace/usage/budget are all carried over;
+        events are written into events.jsonl in order.
+
+        Returns ``{session_id, imported_from, events_imported}``. Useful
+        for restoring from backup, sharing a repro between machines, or
+        seeding a new daemon with a known starting state.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(400, "body must be JSON")
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+
+        events = body.get("events")
+        if not isinstance(events, list):
+            raise HTTPException(400, "events array required")
+
+        # Build a new session with the imported provider/model/workspace.
+        new_session = Session.create(
+            sessions_root,
+            model=str(body.get("model") or "auto"),
+            workspace_root=body.get("workspace_root"),
+            auto_approve_in_sandbox=False,
+            provider=str(body.get("provider") or "lmstudio"),
+            model_name=body.get("model_name"),
+            protocol=body.get("protocol"),
+        )
+        # Mark the lineage in meta so an audit can trace the import chain.
+        original_id = body.get("id")
+        if original_id:
+            new_session._meta["imported_from"] = str(original_id)
+        # Carry over usage + budget if present so cost tracking continues.
+        usage = body.get("usage") or {}
+        if isinstance(usage, dict):
+            new_session._meta["usage"] = {
+                k: int(usage.get(k, 0))
+                for k in ("input_tokens", "output_tokens", "total_tokens", "turns")
+            }
+        budget = body.get("budget") or {}
+        if isinstance(budget, dict):
+            new_session._meta["budget"] = {
+                k: budget.get(k) for k in ("max_total_tokens", "max_usd")
+                if budget.get(k) is not None
+            }
+        new_session._save_meta()
+
+        # Append events verbatim. Skip non-dict entries defensively.
+        target = new_session.dir / "events.jsonl"
+        kept = 0
+        with open(target, "a", encoding="utf-8") as f:
+            for ev in events:
+                if not isinstance(ev, dict) or "type" not in ev:
+                    continue
+                f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+                kept += 1
+        return {
+            "session_id": new_session.id,
+            "imported_from": original_id,
+            "events_imported": kept,
+        }
+
     @app.get("/api/sessions/{sid}/export")
     async def session_export(sid: str, format: str = "json"):
         """Export a full session as a self-contained record (sub-project 31).
