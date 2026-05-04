@@ -106,26 +106,44 @@ async def run_turn(
     if (llm is None) == (provider is None):
         raise ValueError("run_turn requires exactly one of llm= or provider=")
 
-    enabled = registry.subset(session.tool_overrides)
-    tool_schemas = {t.name: t.schema for t in enabled}
-    descriptions = {t.name: t.description for t in enabled}
-    react_schema = build_react_schema(tool_schemas)
-    native_tool_schemas = build_native_tool_schemas(tool_schemas, descriptions)
-
     # Plan-mode detection (sub-project 10.4): if the most recent user message
     # starts with `/plan `, swap the system prompt for a planning-only variant
     # that forbids tool calls and demands a JSON-encoded checklist in
     # `final_answer`. Detection is strict-prefix to avoid false positives on
     # casual chat ("plan an outline").
     from godbot.prompts import is_plan_request, build_plan_system_prompt
+    from godbot.core.commands import match_command
 
     plan_mode = False
+    custom_command = None
     last_user_msg = next(
         (ev["content"] for ev in reversed(list(session._events())) if ev.get("type") == "user"),
         None,
     )
-    if last_user_msg is not None and is_plan_request(last_user_msg):
-        plan_mode = True
+    if last_user_msg is not None:
+        if is_plan_request(last_user_msg):
+            plan_mode = True
+        else:
+            # Custom slash command (sub-project 18). User-defined skill files
+            # under ~/.godbot/commands/<name>.toml expand here. The match
+            # excludes "/plan" by design (plan-mode owns it above).
+            try:
+                custom_command = match_command(last_user_msg)
+            except Exception:
+                custom_command = None
+
+    # When a custom command sets a tool_overrides allowlist, narrow the
+    # registry subset for this turn only — but do NOT mutate the session's
+    # persistent override (the user might unscope by sending a non-command
+    # follow-up message).
+    if custom_command is not None and custom_command.tool_overrides:
+        enabled = registry.subset(custom_command.tool_overrides)
+    else:
+        enabled = registry.subset(session.tool_overrides)
+    tool_schemas = {t.name: t.schema for t in enabled}
+    descriptions = {t.name: t.description for t in enabled}
+    react_schema = build_react_schema(tool_schemas)
+    native_tool_schemas = build_native_tool_schemas(tool_schemas, descriptions)
 
     # Build the system prompt from the filtered tool subset so the model never
     # sees catalog entries that the schema enum would reject anyway. Falls
@@ -137,6 +155,11 @@ async def run_turn(
         sys_prompt = system_prompt_builder(enabled)
     else:
         sys_prompt = system_prompt
+    # Custom command suffix appends to the regular prompt (and even plan-mode,
+    # though that combination is unusual — user typed /plan which won't match
+    # a custom name anyway).
+    if custom_command is not None and custom_command.system_prompt_suffix:
+        sys_prompt = sys_prompt + "\n\n" + custom_command.system_prompt_suffix
 
     # Activate the workspace contextvar for the duration of the turn so
     # tools running in worker threads (asyncio.to_thread) inherit it.

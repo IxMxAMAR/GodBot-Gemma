@@ -357,6 +357,30 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
             _ws_current.reset(token)
         return {"summary": text, "cached": False}
 
+    @app.get("/api/commands")
+    async def commands_list():
+        """List user-defined slash commands (sub-project 18).
+
+        Reads ``~/.godbot/commands/*.toml`` (or ``$GODBOT_HOME/commands/``)
+        and returns name + description for each. Studio uses this to
+        populate a quick-action picker; the agent loop uses the
+        ``match_command`` path independently.
+        """
+        from godbot.core.commands import load_commands
+
+        cmds = load_commands()
+        return {
+            "commands": [
+                {
+                    "name": c.name,
+                    "description": c.description,
+                    "tool_overrides": c.tool_overrides,
+                    "source_path": c.source_path,
+                }
+                for c in cmds.values()
+            ],
+        }
+
     @app.post("/api/tasks")
     async def task_start(request: Request):
         """Schedule a background agent task (sub-project 13).
