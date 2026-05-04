@@ -66,12 +66,50 @@ _BUILTIN_RATES: dict[str, dict[str, ModelRate]] = {
     "groq": {
         "llama-3.3-70b-versatile": ModelRate(0.59, 0.79),
         "llama-3.1-8b-instant": ModelRate(0.05, 0.08),
+        "llama-3.1-70b-versatile": ModelRate(0.59, 0.79),
+        "deepseek-r1-distill-llama-70b": ModelRate(0.75, 0.99),
+        "qwen-2.5-32b": ModelRate(0.79, 0.79),
+        "mixtral-8x7b-32768": ModelRate(0.24, 0.24),
     },
-    "together": {},
-    "cerebras": {},
-    "openrouter": {},
-    "mistral": {},
-    "fireworks": {},
+    "together": {
+        # Together's published per-1M rates as of early 2026 (best-effort
+        # snapshot — users should override via ~/.godbot/pricing.toml).
+        "meta-llama/Llama-3.3-70B-Instruct-Turbo": ModelRate(0.88, 0.88),
+        "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo": ModelRate(0.88, 0.88),
+        "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo": ModelRate(0.18, 0.18),
+        "Qwen/Qwen2.5-Coder-32B-Instruct": ModelRate(0.80, 0.80),
+        "deepseek-ai/DeepSeek-V3": ModelRate(1.25, 1.25),
+        "deepseek-ai/DeepSeek-R1": ModelRate(3.00, 7.00),
+    },
+    "cerebras": {
+        "llama-3.3-70b": ModelRate(0.85, 1.20),
+        "llama-3.1-8b": ModelRate(0.10, 0.10),
+        "llama3.1-70b": ModelRate(0.85, 1.20),
+        "qwen-3-32b": ModelRate(0.40, 0.80),
+    },
+    "openrouter": {
+        # OpenRouter passes through provider rates with a small markup.
+        # These mirror the underlying-provider snapshot for the most
+        # commonly-routed models.
+        "anthropic/claude-3.5-sonnet": ModelRate(3.00, 15.00),
+        "openai/gpt-4o": ModelRate(2.50, 10.00),
+        "openai/gpt-4o-mini": ModelRate(0.15, 0.60),
+        "meta-llama/llama-3.3-70b-instruct": ModelRate(0.45, 0.45),
+        "google/gemini-2.5-flash": ModelRate(0.30, 2.50),
+    },
+    "mistral": {
+        "mistral-large-latest": ModelRate(2.00, 6.00),
+        "mistral-small-latest": ModelRate(0.20, 0.60),
+        "open-mistral-nemo": ModelRate(0.15, 0.15),
+        "codestral-latest": ModelRate(0.30, 0.90),
+    },
+    "fireworks": {
+        # Fireworks uses /per-token billing; converted to per-1M.
+        "accounts/fireworks/models/llama-v3p3-70b-instruct": ModelRate(0.90, 0.90),
+        "accounts/fireworks/models/qwen2p5-coder-32b-instruct": ModelRate(0.90, 0.90),
+        "accounts/fireworks/models/deepseek-v3": ModelRate(0.90, 0.90),
+        "accounts/fireworks/models/deepseek-r1": ModelRate(3.00, 8.00),
+    },
 }
 
 
