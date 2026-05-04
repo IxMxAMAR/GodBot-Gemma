@@ -197,3 +197,30 @@ The extension talks to the same `godbot-web` daemon as the TUI / Discord bot, so
 - Node tests run via `tsx`: `node --import tsx --test src/__tests__/client.test.ts` (Node's built-in runner doesn't natively understand TypeScript, so `tsx` is loaded as an importer)
 - VSIX packaging needs `--allow-missing-repository` since the `package.json` has no `repository` field
 - The webview button glyphs (⊕ ⏹ ⚙) are inline Unicode in the provider's HTML; if your VSCode build renders them as boxes, switch to text labels in `chatProvider.ts`
+
+## MCP servers
+
+GodBot is an [MCP](https://modelcontextprotocol.io) **client**: it can connect to any third-party MCP server (filesystem, github, postgres, brave-search, puppeteer, ...) over stdio and surface its tools to the agent under namespaced names `mcp_<server>_<tool>`. No Python wrappers required.
+
+Configure servers in `~/.godbot/config.toml`:
+
+```toml
+[mcp.servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/some/workspace"]
+
+[mcp.servers.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+
+[mcp.servers.github.env]
+GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_..."
+```
+
+On daemon (or CLI) startup each configured server is spawned as a subprocess and its tools are registered into the agent's tool registry. Failures are logged and skipped — a broken server entry never blocks startup. Use the built-in `mcp_status` tool to inspect connection state and tool inventory at runtime.
+
+Notes:
+- Stdio transport only in v1; HTTP/SSE servers are not yet supported.
+- All MCP tools are marked `dangerous=True` so the user gates each call.
+- Restart the daemon to pick up changes to `[mcp.servers.*]`.
+- On Windows, `npx` resolves to `npx.cmd` automatically when Node is on PATH.
