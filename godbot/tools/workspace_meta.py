@@ -285,6 +285,42 @@ def directory_size(path: str = ".") -> str:
 
 
 @tool()
+def read_lines_around(path: str, line: int, context: int = 3) -> str:
+    """Read a line plus N lines of context above and below (sub-project 97).
+
+    Output is one row per line in ``MARKER LINENO\\tcontent`` format
+    with the target line marked by a leading ``>`` instead of a space.
+    ``context`` clamped to [0, 50].
+
+    Useful for "show me line 42 with surroundings" anchored views,
+    pairs with regex_search / git_blame_line that point at specific
+    lines.
+    """
+    p_str, err = _resolve_workspace_file(path)
+    if err:
+        return err
+    if line < 1:
+        return "[error] line must be >= 1"
+    ctx = max(0, min(int(context), 50))
+    try:
+        with open(p_str, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+    except Exception as e:
+        return f"[error] read failed: {type(e).__name__}: {e}"
+    if not all_lines:
+        return "(empty file)"
+    if line > len(all_lines):
+        return f"[error] line {line} > total {len(all_lines)}"
+    start = max(1, line - ctx)
+    end = min(len(all_lines), line + ctx)
+    out = []
+    for ln in range(start, end + 1):
+        marker = ">" if ln == line else " "
+        out.append(f"{marker}{ln}\t{all_lines[ln - 1].rstrip()}")
+    return "\n".join(out)
+
+
+@tool()
 def head(path: str, lines: int = 50) -> str:
     """Return the first ``lines`` lines of a workspace-confined text file.
 
