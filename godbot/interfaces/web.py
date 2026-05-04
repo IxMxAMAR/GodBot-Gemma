@@ -1116,6 +1116,152 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             "tasks_signaled": tasks_signaled,
         }
 
+    @app.get("/api/admin/snapshot")
+    async def admin_snapshot():
+        """Comprehensive diagnostic dump (sub-project 100).
+
+        Bundles version + health details + aggregate stats + workspaces +
+        recent audit log into one round-trip. Useful for one-shot bug
+        reports, dashboard widgets, "what's going on?" overviews
+        without driving five endpoints.
+
+        Returns ``{version, health, stats, workspaces, audit,
+        generated_at}``. Same data as the individual endpoints; this
+        is just the aggregate. Auth-gated when GODBOT_API_TOKEN is set.
+        """
+        from collections import Counter
+        from datetime import datetime
+        from godbot.core.pricing import compute_cost
+        from godbot.core.registry import DEFAULT
+        from godbot.core.tasks import DEFAULT_RUNNER
+        import time as _time
+
+        try:
+            from importlib.metadata import version as _version
+            ver = _version("godbot")
+        except Exception:
+            ver = "0.0.0"
+
+        try:
+            from godbot.mcp.registry_bridge import _clients as _mcp_clients
+        except Exception:
+            _mcp_clients = {}
+        cfg = load_config()
+        mcp_status_list = []
+        for name in cfg.mcp.servers:
+            client = _mcp_clients.get(name)
+            mcp_status_list.append({
+                "name": name,
+                "connected": bool(client and client.connected),
+                "tool_count": len(client.tools) if (client and client.connected) else 0,
+            })
+        all_tools = DEFAULT.all()
+        session_count = sum(
+            1 for d in sessions_root.iterdir() if d.is_dir() and (d / "meta.json").exists()
+        ) if sessions_root.exists() else 0
+        tasks = DEFAULT_RUNNER.list_tasks()
+        running_tasks = sum(1 for t in tasks if t.status in ("pending", "running"))
+        health = {
+            "status": "ok",
+            "version": ver,
+            "uptime_seconds": int(_time.time() - _DAEMON_STARTED_AT),
+            "providers": {
+                "default": cfg.providers.default,
+                "configured": list(cfg.providers.items.keys()),
+            },
+            "mcp_servers": mcp_status_list,
+            "tools": {
+                "total": len(all_tools),
+                "dangerous": sum(1 for t in all_tools if t.dangerous),
+            },
+            "sessions": {"count": session_count},
+            "background_tasks": {"running": running_tasks, "total": len(tasks)},
+        }
+
+        turn_count = 0
+        tool_calls: Counter[str] = Counter()
+        total_input = 0
+        total_output = 0
+        total_usd = 0.0
+        ws_agg: dict[str, dict] = {}
+        dangerous_names = {t.name for t in all_tools if t.dangerous}
+        audit: list[dict] = []
+        if sessions_root.exists():
+            for sdir in sorted(sessions_root.iterdir(), reverse=True):
+                if not sdir.is_dir():
+                    continue
+                meta_p = sdir / "meta.json"
+                if not meta_p.exists():
+                    continue
+                try:
+                    s = Session.load(sessions_root, sdir.name)
+                except Exception:
+                    continue
+                u = s.usage
+                turn_count += u["turns"]
+                total_input += u["input_tokens"]
+                total_output += u["output_tokens"]
+                cost = compute_cost(
+                    provider=s.provider,
+                    model=s.model_name or s.model,
+                    input_tokens=u["input_tokens"],
+                    output_tokens=u["output_tokens"],
+                )
+                if cost.matched:
+                    total_usd += cost.usd
+                ws_path = s._meta.get("workspace_root")
+                if ws_path:
+                    entry = ws_agg.setdefault(
+                        ws_path, {"path": ws_path, "sessions": 0, "last_activity": ""},
+                    )
+                    entry["sessions"] += 1
+                    started = s._meta.get("started_at") or ""
+                    if started > entry["last_activity"]:
+                        entry["last_activity"] = started
+                pending: dict[str, dict] = {}
+                for ev in s._events():
+                    t = ev.get("type")
+                    if t == "assistant_tool_call":
+                        name = ev.get("name") or "(unknown)"
+                        tool_calls[name] += 1
+                        if name in dangerous_names:
+                            pending[ev.get("call_id", "")] = {
+                                "session_id": s.id,
+                                "started_at": s._meta.get("started_at"),
+                                "name": name,
+                            }
+                    elif t == "tool_result":
+                        cid = ev.get("call_id")
+                        if cid in pending and len(audit) < 20:
+                            audit.append(pending.pop(cid))
+
+        task_status: Counter[str] = Counter(r.status for r in tasks)
+        stats = {
+            "sessions": session_count,
+            "turns": turn_count,
+            "tool_calls_total": sum(tool_calls.values()),
+            "top_tools": [{"name": n, "count": c} for n, c in tool_calls.most_common(10)],
+            "tasks": {"total": len(tasks), "by_status": dict(task_status)},
+            "usage": {
+                "input_tokens": total_input,
+                "output_tokens": total_output,
+                "total_tokens": total_input + total_output,
+            },
+            "estimated_cost_usd": round(total_usd, 6),
+        }
+        workspaces = sorted(
+            ws_agg.values(), key=lambda e: e["last_activity"], reverse=True,
+        )[:10]
+
+        return {
+            "version": ver,
+            "health": health,
+            "stats": stats,
+            "workspaces": workspaces,
+            "audit": audit[:20],
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+
     @app.get("/api/version")
     async def api_version():
         """Bare version probe (sub-project 94).
