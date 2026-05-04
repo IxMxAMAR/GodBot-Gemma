@@ -105,6 +105,75 @@ def _toplevel_listing(repo: Path) -> str:
 
 
 @tool()
+def extract_function(path: str, name: str) -> str:
+    """Extract a Python function or class definition by name (sub-project 48).
+
+    Parses ``path`` with ``ast`` and returns the full source of the
+    first top-level (or method) definition named ``name``, including
+    decorators and docstring. Searches walks recursively so a method
+    nested in a class can be extracted by its bare name.
+
+    Output:
+
+      file:line: <function or class signature>
+      <full source slice>
+
+    Returns ``[error] not found: <name>`` if no definition matches.
+    Workspace-confined; ``.py`` files only.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    if not path or not name:
+        return "[error] both path and name are required"
+    ws = current_workspace()
+    p = _Path(path)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    if not p.is_file():
+        return f"[error] not a file: {p}"
+    if p.suffix != ".py":
+        return f"[error] not a Python file: {p}"
+    try:
+        source = p.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return f"[error] read failed: {type(e).__name__}: {e}"
+    try:
+        tree = ast.parse(source, filename=str(p))
+    except SyntaxError as e:
+        return f"[error] syntax: line {e.lineno} col {e.offset}: {e.msg}"
+
+    matches: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == name:
+                matches.append(node)
+                break  # first hit wins
+    if not matches:
+        return f"[error] not found: {name}"
+    node = matches[0]
+    # Capture decorators above the def line.
+    decorator_start = (
+        min((d.lineno for d in node.decorator_list), default=node.lineno)
+        if getattr(node, "decorator_list", None) else node.lineno
+    )
+    end_line = getattr(node, "end_lineno", node.lineno)
+    src_lines = source.splitlines()
+    body = "\n".join(src_lines[decorator_start - 1:end_line])
+    sig = src_lines[node.lineno - 1].strip()
+    return f"{p}:{decorator_start}: {sig}\n{body}"
+
+
+@tool()
 def find_imports(path: str) -> str:
     """List the imports in a Python file (sub-project 47).
 
