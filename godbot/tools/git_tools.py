@@ -142,3 +142,67 @@ def git_branch(path: str = "") -> str:
     if isinstance(repo, str):
         return repo
     return _run_git(["branch", "--list"], cwd=repo)
+
+
+@tool()
+def git_blame_line(path: str, line: int) -> str:
+    """Show who last modified a specific line (sub-project 96).
+
+    Output:
+
+      file: <abs path>
+      line <N>: <hash> <author> <author-mail> <author-time>
+        <line content>
+
+    Workspace-confined; uses the active workspace if ``path`` is
+    relative. Returns ``[error] ...`` on bad inputs or git failures.
+    Useful for "who wrote this?" / "when did this change?" before
+    proposing edits.
+    """
+    if not path or line < 1:
+        return "[error] path and line>=1 required"
+    target = Path(path)
+    if not target.is_absolute():
+        ws = current_workspace()
+        if ws is not None:
+            target = ws.root / target
+    try:
+        target = target.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    if not target.is_file():
+        return f"[error] not a file: {target}"
+    # Use the parent directory as the git cwd; _resolve_repo_root expects
+    # a directory and the file's parent is always one inside the repo.
+    repo = _resolve_repo_root(str(target.parent))
+    if isinstance(repo, str):
+        return repo
+    out = _run_git(
+        ["blame", "-L", f"{line},{line}", "--porcelain", str(target)],
+        cwd=repo,
+    )
+    if out.startswith("[error]"):
+        return out
+    # Parse porcelain output: header line + key-value pairs + trailing line.
+    lines_out = out.splitlines()
+    if not lines_out:
+        return "(empty blame output)"
+    header = lines_out[0].split()
+    sha = header[0] if header else "?"
+    author = next((ln[7:] for ln in lines_out if ln.startswith("author ")), "?")
+    mail = next((ln[12:] for ln in lines_out if ln.startswith("author-mail ")), "")
+    when = next((ln[12:] for ln in lines_out if ln.startswith("author-time ")), "0")
+    try:
+        from datetime import datetime
+        ts = datetime.fromtimestamp(int(when)).isoformat(timespec="seconds")
+    except Exception:
+        ts = when
+    content = next(
+        (ln[1:] for ln in lines_out if ln.startswith("\t") or ln.startswith(" ")),
+        "",
+    )
+    return (
+        f"file: {target}\n"
+        f"line {line}: {sha[:12]} {author} {mail} {ts}\n"
+        f"  {content}"
+    )
