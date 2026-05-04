@@ -681,6 +681,83 @@ def list_env(prefix: str = "", max_results: int = 30) -> str:
 
 
 @tool()
+def summarize_logs(path: str, levels: str = "ERROR,WARNING", max_lines: int = 50) -> str:
+    """Pull log lines matching one or more level keywords (sub-project 82).
+
+    ``levels`` is a comma-separated list of keywords (case-insensitive)
+    matched as substrings on each line — ``ERROR``, ``CRITICAL``,
+    ``Traceback`` are typical picks. ``max_lines`` caps results
+    (default 50, hard cap 1000). Workspace-confined.
+
+    Output:
+
+      file: <abs path>
+      total lines: <N>
+      matched (M):
+        L42: ERROR something broke
+        L78: WARNING fallback used
+        ...
+
+    Useful as first-look log triage: agent points at a 100k-line log
+    and gets just the stuff worth reading. Pairs with tail (SP55) for
+    "what's happening right now?" while this is "what went wrong?"
+    """
+    from pathlib import Path as _Path
+
+    if not path:
+        return "[error] path required"
+    ws = current_workspace()
+    p = _Path(path)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    if not p.is_file():
+        return f"[error] not a file: {p}"
+
+    keywords = [k.strip().lower() for k in (levels or "").split(",") if k.strip()]
+    if not keywords:
+        return "[error] levels must contain at least one keyword"
+    cap = max(1, min(int(max_lines), 1000))
+
+    matched: list[str] = []
+    total = 0
+    truncated = False
+    try:
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            for lineno, line in enumerate(f, 1):
+                total += 1
+                lower = line.lower()
+                if any(k in lower for k in keywords):
+                    matched.append(f"  L{lineno}: {line.rstrip()}")
+                    if len(matched) >= cap:
+                        truncated = True
+                        # Drain the rest just for the count without storing.
+                        for _ in f:
+                            total += 1
+                        break
+    except Exception as e:
+        return f"[error] read failed: {type(e).__name__}: {e}"
+
+    parts = [
+        f"file: {p}",
+        f"total lines: {total}",
+        f"matched ({len(matched)}{' capped' if truncated else ''}):",
+    ]
+    parts.extend(matched)
+    if truncated:
+        parts.append(f"  ... [stopped at max_lines={cap}]")
+    return "\n".join(parts)
+
+
+@tool()
 def tree(path: str = ".", max_depth: int = 2, max_entries: int = 200) -> str:
     """Render a directory tree as ASCII (sub-project 81).
 
