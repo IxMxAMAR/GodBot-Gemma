@@ -681,6 +681,45 @@ def list_env(prefix: str = "", max_results: int = 30) -> str:
 
 
 @tool()
+def text_replace(text: str, old: str, new: str, count: int = -1) -> str:
+    """Replace ``old`` with ``new`` in ``text`` (sub-project 77).
+
+    ``count`` caps the number of replacements (negative = all). Returns
+    ``"replaced N: <result>"`` on success, ``[error] ...`` on bad input.
+    Useful when the agent has text in a variable and wants to transform
+    it without a run_python detour.
+
+    Plain string replacement, not regex. Use ``run_python`` for regex.
+    """
+    if not isinstance(text, str) or not isinstance(old, str) or not isinstance(new, str):
+        return "[error] text, old, new must all be strings"
+    if not old:
+        return "[error] old must be non-empty"
+    occurrences = text.count(old)
+    n_to_do = occurrences if count < 0 else min(int(count), occurrences)
+    out = text.replace(old, new, n_to_do if count >= 0 else -1)
+    return f"replaced {n_to_do}: {out}"
+
+
+@tool()
+def text_truncate(text: str, max_chars: int = 1000, suffix: str = "...") -> str:
+    """Truncate ``text`` to at most ``max_chars`` characters (sub-project 77).
+
+    Appends ``suffix`` (default ``"..."``) when truncation occurs.
+    Returns the input unchanged when already short enough. ``max_chars``
+    clamped to [1, 1_000_000].
+    """
+    if not isinstance(text, str):
+        return "[error] text must be a string"
+    cap = max(1, min(int(max_chars), 1_000_000))
+    if len(text) <= cap:
+        return text
+    suffix_str = str(suffix)
+    keep = max(1, cap - len(suffix_str))
+    return text[:keep] + suffix_str
+
+
+@tool()
 def count_files(pattern: str = "**/*", root: str = ".", max_count: int = 10_000) -> str:
     """Count files matching a recursive glob pattern (sub-project 76).
 
