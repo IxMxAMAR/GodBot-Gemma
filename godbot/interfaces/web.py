@@ -357,6 +357,80 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
             _ws_current.reset(token)
         return {"summary": text, "cached": False}
 
+    @app.post("/api/complete")
+    async def inline_complete(request: Request):
+        """Cursor-style inline completion (sub-project 12).
+
+        Body: ``{prefix: str, suffix?: str, language?: str, max_tokens?: int,
+        provider?: str, model?: str}``. Returns ``{completion, model, elapsed_ms}``.
+
+        Bypasses the agent loop for keystroke-frequency latency. Uses the
+        configured default provider+model unless overridden, falls through
+        with HTTP 501 for providers we don't yet support (Anthropic/Gemini).
+        """
+        from godbot.core.completion import complete_text
+
+        body = await request.json()
+        prefix = str(body.get("prefix", ""))
+        suffix = str(body.get("suffix", ""))
+        language = body.get("language")
+        if language is not None and not isinstance(language, str):
+            raise HTTPException(400, "language must be a string")
+        max_tokens = int(body.get("max_tokens", 64))
+
+        cfg = load_config()
+        # Pick provider: explicit override > default. Same for the model.
+        provider_name = (body.get("provider") or cfg.providers.default or "lmstudio")
+        item = cfg.providers.items.get(provider_name)
+        if item is None:
+            raise HTTPException(
+                400, f"provider {provider_name!r} not configured in [providers.{provider_name}]",
+            )
+        model = body.get("model") or item.default_model or "auto"
+        # 'auto' is meaningless for raw completion — resolve via the provider
+        # so we hit a real model id. Reuse the existing factory.
+        if model == "auto":
+            try:
+                pcfg = ProviderConfigType(
+                    name=provider_name,
+                    base_url=item.base_url,
+                    api_key=item.api_key
+                    or (item.api_key_env and os.environ.get(item.api_key_env, "") or ""),
+                    default_model=item.default_model,
+                )
+                provider_inst = get_provider_factory(provider_name, pcfg)
+                resolved = await provider_inst.select_model("auto")
+                model = resolved.id
+            except Exception as e:
+                raise HTTPException(503, f"could not resolve model: {e}")
+
+        api_key = item.api_key
+        if not api_key and item.api_key_env:
+            api_key = os.environ.get(item.api_key_env, "")
+
+        try:
+            res = await complete_text(
+                prefix=prefix,
+                suffix=suffix,
+                language=language,
+                provider_name=provider_name,
+                base_url=item.base_url,
+                api_key=api_key,
+                model=model,
+                max_tokens=max_tokens,
+            )
+        except ValueError as e:
+            # Provider not supported (Anthropic/Gemini for now).
+            raise HTTPException(501, str(e))
+        except Exception as e:
+            raise HTTPException(502, f"upstream provider failed: {type(e).__name__}: {e}")
+
+        return {
+            "completion": res.completion,
+            "model": res.model,
+            "elapsed_ms": res.elapsed_ms,
+        }
+
     @app.get("/api/rag/collections")
     async def rag_collections():
         home = Path(os.environ.get("GODBOT_HOME", str(Path.home() / ".godbot")))
