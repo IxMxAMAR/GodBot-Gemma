@@ -944,6 +944,102 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
     async def health():
         return {"status": "ok"}
 
+    @app.post("/api/agent/dry_run")
+    async def agent_dry_run(request: Request):
+        """Render the system prompt + tool catalog WITHOUT invoking the model
+        (sub-project 49).
+
+        Body: ``{session_id: str, message?: str}``. The body's ``message``
+        is appended to the session log so plan-mode / custom-command
+        detection runs against it (the message is then rolled back via
+        events.jsonl truncation? No — we instead simulate by checking
+        the prefix locally).
+
+        Actually simpler: we don't mutate the session at all. We snapshot
+        the registry, run the plan-mode + custom-command checks against
+        the supplied message (or the session's last user event), and
+        render the prompt the agent loop *would* build.
+
+        Returns:
+          {
+            system_prompt,
+            mode: "plan" | "custom_command" | "default",
+            command_name?,
+            tool_catalog: [{name, description, schema, dangerous}],
+            protocol_pref,
+            message_count,
+          }
+        """
+        from godbot.core.commands import match_command
+        from godbot.core.registry import DEFAULT
+        from godbot.prompts import (
+            build_plan_system_prompt,
+            build_system_prompt,
+            is_plan_request,
+        )
+
+        body = await request.json()
+        sid = body.get("session_id")
+        if not sid:
+            raise HTTPException(400, "session_id required")
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+
+        # Determine the prompt mode for the hypothetical message. Falls
+        # back to the most recent user event if no message supplied.
+        msg = body.get("message")
+        if msg is None:
+            for ev in reversed(list(s._events())):
+                if ev.get("type") == "user":
+                    msg = ev.get("content")
+                    break
+        msg = msg or ""
+
+        plan_mode = is_plan_request(msg)
+        custom = None if plan_mode else match_command(msg)
+
+        # Tool subset honoured for this run (plan/custom commands narrow it).
+        if custom is not None and custom.tool_overrides:
+            enabled = DEFAULT.subset(custom.tool_overrides)
+        else:
+            enabled = DEFAULT.subset(s.tool_overrides)
+
+        if plan_mode:
+            sys_prompt = build_plan_system_prompt(enabled)
+            mode = "plan"
+        else:
+            sys_prompt = build_system_prompt(enabled)
+            mode = "custom_command" if custom is not None else "default"
+            if custom is not None and custom.system_prompt_suffix:
+                sys_prompt = sys_prompt + "\n\n" + custom.system_prompt_suffix
+
+        tool_catalog = [
+            {
+                "name": t.name,
+                "description": t.description,
+                "dangerous": t.dangerous,
+                "schema": t.schema,
+            }
+            for t in sorted(enabled, key=lambda x: x.name)
+        ]
+
+        # Protocol preference: easy when provider is known.
+        protocol_pref = s.protocol or "react_json"
+
+        return {
+            "system_prompt": sys_prompt,
+            "mode": mode,
+            "command_name": custom.name if custom is not None else None,
+            "tool_catalog": tool_catalog,
+            "protocol_pref": protocol_pref,
+            "message_count": sum(
+                1 for ev in s._events()
+                if ev.get("type") in ("user", "assistant_final", "assistant_tool_call")
+            ),
+        }
+
     @app.get("/api/health/details")
     async def health_details():
         """Enriched health diagnostics (sub-project 43).
