@@ -615,6 +615,73 @@ def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
     return "\n".join(diff_lines)
 
 
+_HASH_ALGOS = {"sha256", "sha1", "md5", "sha512", "blake2b"}
+
+
+@tool()
+def hash_text(text: str, algorithm: str = "sha256") -> str:
+    """Compute a cryptographic hash of UTF-8 text (sub-project 68).
+
+    Algorithms supported: sha256 (default), sha1, md5, sha512, blake2b.
+    Returns ``<algo>: <hex digest>`` or ``[error] ...`` on unknown
+    algorithm. Useful for cache keys, content-addressed lookups, and
+    integrity tags.
+    """
+    import hashlib as _hashlib
+    if not isinstance(text, str):
+        return "[error] text must be a string"
+    algo = algorithm.lower()
+    if algo not in _HASH_ALGOS:
+        return f"[error] unknown algorithm: {algorithm!r} (try: {', '.join(sorted(_HASH_ALGOS))})"
+    h = _hashlib.new(algo)
+    h.update(text.encode("utf-8"))
+    return f"{algo}: {h.hexdigest()}"
+
+
+@tool()
+def hash_file(path: str, algorithm: str = "sha256") -> str:
+    """Compute a cryptographic hash of a workspace-confined file
+    (sub-project 68).
+
+    Streams the file in 64 KB chunks so big files don't blow memory.
+    Same algorithm set as ``hash_text``. Returns
+    ``<algo>: <hex digest>  (<path>, <bytes> bytes)``.
+    """
+    import hashlib as _hashlib
+    from pathlib import Path as _Path
+
+    if not path:
+        return "[error] path required"
+    ws = current_workspace()
+    p = _Path(path)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    if not p.is_file():
+        return f"[error] not a file: {p}"
+    algo = algorithm.lower()
+    if algo not in _HASH_ALGOS:
+        return f"[error] unknown algorithm: {algorithm!r} (try: {', '.join(sorted(_HASH_ALGOS))})"
+    h = _hashlib.new(algo)
+    size = 0
+    try:
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(64 * 1024), b""):
+                h.update(chunk)
+                size += len(chunk)
+    except Exception as e:
+        return f"[error] read failed: {type(e).__name__}: {e}"
+    return f"{algo}: {h.hexdigest()}  ({p}, {size} bytes)"
+
+
 @tool()
 def now_iso(tz: str = "local") -> str:
     """Return the current time as an ISO-8601 string (sub-project 67).
