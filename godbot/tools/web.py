@@ -31,6 +31,42 @@ def web_fetch(url: str, max_chars: int = 20000) -> str:
     return body
 
 
+@tool(timeout=15)
+def http_status(url: str) -> str:
+    """HEAD an URL to check liveness without downloading the body (sub-project 66).
+
+    Reports the HTTP status code, content-type, content-length, and
+    final URL after redirects. Useful for "is this endpoint up?",
+    "is this download still available?", or pre-flight checks before
+    a heavier ``web_fetch``.
+
+    Falls back to a small GET if the server rejects HEAD (some CDNs
+    don't support it). Returns ``[error] ...`` on transport failure.
+    """
+    try:
+        with httpx.Client(follow_redirects=True, timeout=10.0,
+                          headers={"User-Agent": "GodBot/0.1"}) as c:
+            try:
+                r = c.head(url)
+                if r.status_code == 405:  # method not allowed → small GET
+                    raise ValueError("head_not_supported")
+            except (httpx.HTTPError, ValueError):
+                r = c.get(url, headers={"Range": "bytes=0-0"})
+    except Exception as e:
+        return f"[error] fetch failed: {type(e).__name__}: {e}"
+    parts = [
+        f"status: {r.status_code}",
+        f"final_url: {r.url}",
+    ]
+    ctype = r.headers.get("content-type")
+    if ctype:
+        parts.append(f"content-type: {ctype}")
+    clen = r.headers.get("content-length")
+    if clen:
+        parts.append(f"content-length: {clen}")
+    return "\n".join(parts)
+
+
 @tool(timeout=30)
 def web_search(query: str, max_results: int = 8) -> str:
     """Web search via DuckDuckGo HTML endpoint. Returns title + url + snippet per result."""
