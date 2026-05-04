@@ -615,6 +615,71 @@ def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
     return "\n".join(diff_lines)
 
 
+_ENV_REDACT_PATTERNS = (
+    "key", "token", "secret", "password", "passwd", "auth",
+    "credential", "private", "session",
+)
+
+
+def _redact(name: str, value: str) -> str:
+    """Mask the value if the name looks like a secret."""
+    lower = name.lower()
+    if any(p in lower for p in _ENV_REDACT_PATTERNS):
+        if not value:
+            return "(empty)"
+        if len(value) <= 6:
+            return "***"
+        return f"{value[:2]}***{value[-2:]} (len={len(value)})"
+    return value
+
+
+@tool()
+def get_env(name: str) -> str:
+    """Read one environment variable (sub-project 75).
+
+    Names that look secret-bearing (contain key / token / secret /
+    password / auth / credential / private / session) are redacted in
+    the response — the value is shown as ``ab***yz (len=N)`` so the
+    agent can verify presence without leaking the secret into logs.
+
+    Returns ``"<name>: (unset)"`` when missing. Non-dangerous,
+    read-only.
+    """
+    import os as _os
+    if not name:
+        return "[error] name required"
+    v = _os.environ.get(name)
+    if v is None:
+        return f"{name}: (unset)"
+    return f"{name}: {_redact(name, v)}"
+
+
+@tool()
+def list_env(prefix: str = "", max_results: int = 30) -> str:
+    """List environment variables, optionally filtered by name prefix
+    (sub-project 75).
+
+    Same redaction rules as ``get_env``. Returns up to ``max_results``
+    entries (default 30, hard cap 200) sorted alphabetically. Useful
+    for "what API keys are configured?" without leaking values.
+    """
+    import os as _os
+    cap = max(1, min(int(max_results), 200))
+    items = sorted(
+        (n for n in _os.environ if n.startswith(prefix)),
+        key=str.lower,
+    )
+    if not items:
+        return f"(no env vars matching prefix {prefix!r})"
+    truncated = len(items) > cap
+    items = items[:cap]
+    rows = [f"{n}={_redact(n, _os.environ[n])}" for n in items]
+    out = "\n".join(rows)
+    if truncated:
+        out += f"\n... [truncated at max_results={cap}]"
+    return out
+
+
 @tool()
 def parse_url(url: str) -> str:
     """Parse a URL into structured components (sub-project 74).
