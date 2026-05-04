@@ -491,6 +491,57 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
             "elapsed_ms": res.elapsed_ms,
         }
 
+    @app.post("/api/rag/index_workspace")
+    async def rag_index_workspace(request: Request):
+        """Build (or rebuild) the RAG index for a workspace.
+
+        Body: ``{workspace: str, force?: bool}``. The collection name is
+        derived from the workspace path via SHA-1 so two workspaces with
+        the same basename don't collide. Indexing runs synchronously in a
+        worker thread; for large repos consider calling this once per
+        workspace open (the daemon caches the collection on disk so
+        subsequent calls find existing data and bail unless ``force``).
+
+        Returns ``{collection, indexed_chunks, cached: bool}``.
+        """
+        from godbot.tools.knowledge import workspace_collection_name
+        from godbot.index import build_index
+        from pathlib import Path as _Path
+
+        body = await request.json()
+        workspace = body.get("workspace")
+        force = bool(body.get("force", False))
+        if not workspace:
+            raise HTTPException(400, "workspace required")
+        try:
+            ws_root = _Path(workspace).resolve()
+        except Exception as e:
+            raise HTTPException(400, f"workspace invalid: {e}")
+        if not ws_root.is_dir():
+            raise HTTPException(400, f"workspace not a directory: {ws_root}")
+
+        collection = workspace_collection_name(str(ws_root))
+        home = _Path(os.environ.get("GODBOT_HOME", str(_Path.home() / ".godbot")))
+        coll_dir = home / "rag" / collection
+        if coll_dir.exists() and not force:
+            # Already indexed — return without re-running. Caller can pass
+            # force=true to rebuild after big code changes.
+            return {"collection": collection, "indexed_chunks": 0, "cached": True}
+
+        # The build_index call is blocking (chroma writes, embedding API
+        # round-trips). Offload to a thread so the event loop stays free.
+        try:
+            count = await asyncio.to_thread(
+                build_index,
+                ws_root,
+                collection=collection,
+                reindex=force,
+                force=force,
+            )
+        except Exception as e:
+            raise HTTPException(502, f"index build failed: {type(e).__name__}: {e}")
+        return {"collection": collection, "indexed_chunks": count, "cached": False}
+
     @app.get("/api/rag/collections")
     async def rag_collections():
         home = Path(os.environ.get("GODBOT_HOME", str(Path.home() / ".godbot")))
