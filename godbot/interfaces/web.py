@@ -556,6 +556,83 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
             ],
         }
 
+    @app.post("/api/agent/quickrun")
+    async def agent_quickrun(request: Request):
+        """One-shot synchronous agent invocation (sub-project 93).
+
+        Body: ``{goal: str, workspace?: str, provider?: str, model?: str,
+        max_steps?: int, max_wait_seconds?: int = 60, safe_only?: bool}``.
+
+        Wraps POST /api/tasks + polling /api/tasks/{tid}/wait into a
+        single round-trip for clients that just want "run this goal,
+        give me the answer". Returns:
+
+          {
+            result: str,           # final assistant message
+            session_id: str,
+            task_id: str,
+            tool_calls: int,
+            step_count: int,
+            elapsed_ms: int,
+            status: "done" | "error" | "cancelled" | "interrupted" | "running",
+          }
+
+        ``status: running`` means the wait timed out — caller can keep
+        polling /api/tasks/{tid}/wait to finish observing.
+        """
+        from godbot.core.tasks import DEFAULT_RUNNER, _TERMINAL
+        import time as _time
+
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        goal = body.get("goal")
+        if not goal or not isinstance(goal, str):
+            raise HTTPException(400, "goal (str) required")
+
+        workspace = body.get("workspace")
+        provider = body.get("provider", "lmstudio")
+        model_name = body.get("model_name") or body.get("model") or "auto"
+        max_steps = int(body.get("max_steps", 12))
+        safe_only = bool(body.get("safe_only", True))
+        try:
+            max_wait = float(body.get("max_wait_seconds", 60.0))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "max_wait_seconds must be a number")
+        max_wait = min(max(2.0, max_wait), 600.0)
+
+        rec = DEFAULT_RUNNER.start_task(
+            goal=goal,
+            sessions_root=sessions_root,
+            workspace=workspace,
+            provider=provider,
+            model_name=model_name,
+            max_steps=max_steps,
+            safe_only=safe_only,
+        )
+        # Poll until terminal or timeout. Same primitive as /api/tasks/{tid}/wait
+        # but inlined so we don't bounce through HTTP again.
+        deadline = _loop_now() + max_wait
+        started = _time.time()
+        while _loop_now() < deadline:
+            await asyncio.sleep(0.25)
+            cur = DEFAULT_RUNNER.get_task(rec.id)
+            if cur is None:
+                raise HTTPException(503, "task vanished")
+            if cur.status in _TERMINAL:
+                rec = cur
+                break
+        elapsed_ms = int((_time.time() - started) * 1000)
+        return {
+            "result": rec.result,
+            "session_id": rec.session_id,
+            "task_id": rec.id,
+            "tool_calls": len(rec.tool_calls),
+            "step_count": rec.step_count,
+            "elapsed_ms": elapsed_ms,
+            "status": rec.status,
+        }
+
     @app.post("/api/tasks")
     async def task_start(request: Request):
         """Schedule a background agent task (sub-project 13).
