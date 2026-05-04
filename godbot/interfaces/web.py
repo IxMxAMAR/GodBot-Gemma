@@ -580,6 +580,41 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
         sent = DEFAULT_RUNNER.cancel_task(tid)
         return {"ok": True, "sent": sent}
 
+    @app.get("/api/tasks/{tid}/wait")
+    async def task_wait(tid: str, timeout: float = 60.0):
+        """Long-poll until a task reaches a terminal status (sub-project 45).
+
+        Blocks the request up to ``timeout`` seconds (capped at 300s for
+        safety) and returns the task record once it's done/error/cancelled
+        /interrupted, or once the timeout elapses (in which case the
+        record's status will still be running). Always 200 — clients
+        check ``status`` to know whether the wait succeeded or timed out.
+
+        Easier than driving the SSE stream when you just want "did the
+        task finish?" — a script can curl this and unblock when done.
+        """
+        from godbot.core.tasks import DEFAULT_RUNNER, _TERMINAL
+
+        rec = DEFAULT_RUNNER.get_task(tid)
+        if rec is None:
+            raise HTTPException(404, "no such task")
+        if rec.status in _TERMINAL:
+            return rec.to_dict()
+        timeout = min(max(0.5, float(timeout)), 300.0)
+        deadline = _loop_now() + timeout
+        # Poll the live record every 250ms. We could subscribe to the
+        # event log instead, but a small poll keeps this implementation
+        # independent of EventLog wiring quirks (closed log, persisted
+        # task, etc.).
+        while _loop_now() < deadline:
+            await asyncio.sleep(0.25)
+            rec = DEFAULT_RUNNER.get_task(tid)
+            if rec is None:
+                raise HTTPException(404, "task vanished")
+            if rec.status in _TERMINAL:
+                break
+        return rec.to_dict()
+
     @app.get("/api/tasks/{tid}/stream")
     async def task_stream(request: Request, tid: str, last_event_id: int = 0):
         """SSE stream of live progress for one background task (sub-project 25).
