@@ -1031,6 +1031,97 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
                 continue
         return out
 
+    @app.delete("/api/sessions/{sid}")
+    async def session_delete(sid: str):
+        """Permanently delete a session (sub-project 34).
+
+        Removes the entire ``<sessions_root>/<sid>/`` directory: meta,
+        events.jsonl, blobs/. Also drops the in-process cache entry so
+        subsequent /api/chat for the same id will 404. Returns
+        ``{ok: true}`` on success, 404 if the session never existed.
+
+        Irreversible — no soft-delete in v1. The user can re-export to
+        markdown via /api/sessions/{sid}/export before deleting.
+        """
+        sdir = sessions_root / sid
+        if not sdir.exists() or not sdir.is_dir():
+            raise HTTPException(404, "no such session")
+        # Remove from caches + cancel any in-flight stream first.
+        _sessions_cache.pop(sid, None)
+        log = _logs.pop(sid, None)
+        if log is not None and not log.closed:
+            log.close()
+        cancel = _cancels.pop(sid, None)
+        if cancel is not None:
+            cancel.set()
+        import shutil as _shutil
+        try:
+            _shutil.rmtree(sdir)
+        except Exception as e:
+            raise HTTPException(500, f"delete failed: {type(e).__name__}: {e}")
+        return {"ok": True, "deleted": sid}
+
+    @app.post("/api/sessions/cleanup")
+    async def sessions_cleanup(request: Request):
+        """Bulk-delete sessions older than a cutoff (sub-project 34).
+
+        Body: ``{older_than_days?: int = 30, dry_run?: bool = false}``.
+        ``dry_run=true`` reports which sessions WOULD be deleted without
+        actually removing anything; the default is destructive. Active
+        sessions (started today, regardless of cutoff) are always kept.
+
+        Returns ``{deleted: [sid, ...], kept: int, dry_run: bool}``.
+        """
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        days = int(body.get("older_than_days", 30))
+        if days < 1:
+            raise HTTPException(400, "older_than_days must be >= 1")
+        dry_run = bool(body.get("dry_run", False))
+
+        from datetime import datetime, timedelta
+        cutoff = datetime.now() - timedelta(days=days)
+        to_delete: list[str] = []
+        kept = 0
+        if not sessions_root.exists():
+            return {"deleted": [], "kept": 0, "dry_run": dry_run}
+        for sdir in sessions_root.iterdir():
+            if not sdir.is_dir():
+                continue
+            try:
+                s = Session.load(sessions_root, sdir.name)
+            except Exception:
+                # Bad meta — count as kept rather than blow it away.
+                kept += 1
+                continue
+            started = s._meta.get("started_at")
+            try:
+                ts = datetime.fromisoformat(started) if started else None
+            except Exception:
+                ts = None
+            if ts is None or ts >= cutoff:
+                kept += 1
+                continue
+            to_delete.append(s.id)
+        if not dry_run:
+            import shutil as _shutil
+            for sid in to_delete:
+                try:
+                    _sessions_cache.pop(sid, None)
+                    log = _logs.pop(sid, None)
+                    if log is not None and not log.closed:
+                        log.close()
+                    _cancels.pop(sid, None)
+                    _shutil.rmtree(sessions_root / sid)
+                except Exception:
+                    pass  # best-effort; report-as-attempted
+        return {"deleted": to_delete, "kept": kept, "dry_run": dry_run}
+
     @app.get("/api/sessions/search")
     async def sessions_search(q: str, workspace: Optional[str] = None, limit: int = 20):
         """Substring search across session transcripts (sub-project 33).
