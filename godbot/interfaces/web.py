@@ -413,6 +413,22 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
             raise HTTPException(500, f"reload failed: {type(e).__name__}: {e}")
         return {"ok": True, "modules_reloaded": count, "tools_registered": len(DEFAULT.all())}
 
+    @app.post("/api/sessions/{sid}/clear_overrides")
+    async def session_clear_overrides(sid: str):
+        """Reset a session's tool-override allowlist (sub-project 92).
+
+        Tools toggled off via /api/tools/toggle stay off until reset.
+        This endpoint clears the override entirely, restoring the
+        default "every registered tool is enabled" behaviour.
+        """
+        try:
+            session = _sessions_cache.get(sid) or Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        _sessions_cache[sid] = session
+        session.set_tool_overrides(None)
+        return {"ok": True, "tool_overrides": session.tool_overrides}
+
     @app.post("/api/tools/toggle")
     async def tool_toggle(request: Request):
         body = await request.json()
