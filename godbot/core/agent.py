@@ -29,6 +29,42 @@ def _new_call_id() -> str:
     return "c" + uuid.uuid4().hex[:10]
 
 
+def _compute_fs_diff(name: str, args: dict) -> Optional[dict]:
+    """Build a {path, before, after} dict for FS-write gates.
+
+    For ``write_file`` the proposed ``after`` is ``args["content"]``.
+    For ``edit_file`` we simulate the find/replace locally so the UI can
+    show the diff without the tool actually running. Returns ``None`` for
+    any other tool.
+
+    All filesystem errors collapse to ``before=None`` so a missing/unreadable
+    file just renders as a "creating new file" diff in the UI.
+    """
+    if name not in {"write_file", "edit_file"}:
+        return None
+    from pathlib import Path
+    path_str = str(args.get("path", ""))
+    before: Optional[str]
+    try:
+        p = Path(path_str)
+        if p.exists() and p.is_file():
+            before = p.read_text(encoding="utf-8", errors="replace")
+        else:
+            before = None
+    except Exception:
+        before = None
+    if name == "write_file":
+        after = str(args.get("content", ""))
+    else:  # edit_file
+        old_str = str(args.get("old", ""))
+        new_str = str(args.get("new", ""))
+        if before is not None and old_str and old_str in before:
+            after = before.replace(old_str, new_str, 1)
+        else:
+            after = before or ""
+    return {"path": path_str, "before": before, "after": after}
+
+
 async def run_turn(
     *,
     llm,
@@ -142,15 +178,21 @@ async def _handle_action(
         await emit(ToolResultEvent(id=call_id, preview=msg, blob=None, duration_ms=0))
         return
 
+    # Compute fs_diff for FS-write tools so the UI can render an inline diff.
+    fs_diff = _compute_fs_diff(name, args)
+
     # Workspace auto-approval and gate logic.
     ws = session.workspace
+    args_override: Optional[dict] = None
     if ws is not None and ws.auto_approve_in_sandbox:
         # In sandbox YOLO mode, FS-safe dangerous tools auto-approve;
         # all other dangerous tools STILL gate (regardless of any prior
         # session-level "always" approval, which we deliberately ignore here
         # because the sandbox is a stronger guarantee than the per-session flag).
         if registry.is_dangerous(name) and name not in SANDBOX_SAFE_DANGEROUS_TOOLS:
-            decision = await session.await_gate(call_id, name, args, emit, timeout=300)
+            decision, args_override = await session.await_gate(
+                call_id, name, args, emit, fs_diff=fs_diff, timeout=300,
+            )
             if decision == "deny":
                 msg = "User denied this tool call."
                 session.append_tool_result(call_id, msg)
@@ -164,7 +206,9 @@ async def _handle_action(
         and not session.is_auto_approved(name)
         and not session.yolo
     ):
-        decision = await session.await_gate(call_id, name, args, emit, timeout=300)
+        decision, args_override = await session.await_gate(
+            call_id, name, args, emit, fs_diff=fs_diff, timeout=300,
+        )
         if decision == "deny":
             msg = "User denied this tool call."
             session.append_tool_result(call_id, msg)
@@ -173,6 +217,19 @@ async def _handle_action(
         if decision == "always":
             session.mark_auto_approved(name)
     # else: non-dangerous, OR sandbox-FS-safe, OR plain auto_approved/yolo — proceed.
+
+    # Apply user-provided args override (e.g. user-edited diff content).
+    # The merged dict is re-validated against the tool's JSON schema so a
+    # malicious override can't smuggle invalid args past the validator.
+    if args_override:
+        merged = {**args, **args_override}
+        err = registry.validate_args(name, merged)
+        if err is not None:
+            msg = f"args invalid after override: {err}"
+            session.append_tool_result(call_id, msg)
+            await emit(ToolResultEvent(id=call_id, preview=msg, blob=None, duration_ms=0))
+            return
+        args = merged
 
     started = time.time()
     try:

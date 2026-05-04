@@ -42,6 +42,9 @@ class Session:
         self._meta = meta
         self._gate_events: dict[str, asyncio.Event] = {}
         self._gate_decisions: dict[str, str] = {}
+        # Optional per-gate args overrides (set by resolve_gate, consumed by
+        # await_gate). Caller-edited content for write_file diffs lives here.
+        self._gate_args_overrides: dict[str, Optional[dict[str, Any]]] = {}
 
     @property
     def model(self) -> str:
@@ -241,27 +244,49 @@ class Session:
     def has_pending_gate(self, call_id: str) -> bool:
         return call_id in self._gate_events and call_id not in self._gate_decisions
 
-    def resolve_gate(self, call_id: str, decision: str) -> bool:
+    def resolve_gate(
+        self,
+        call_id: str,
+        decision: str,
+        args_override: Optional[dict[str, Any]] = None,
+    ) -> bool:
         if decision not in {"allow", "deny", "always"}:
             raise ValueError(f"bad decision {decision!r}")
         if call_id not in self._gate_events:
             return False
         self._gate_decisions[call_id] = decision
+        if args_override is not None:
+            if not isinstance(args_override, dict):
+                raise ValueError("args_override must be a dict")
+            self._gate_args_overrides[call_id] = dict(args_override)
         self._gate_events[call_id].set()
-        self.append_meta_event("gate_decision", {"call_id": call_id, "decision": decision})
+        meta_payload: dict[str, Any] = {"call_id": call_id, "decision": decision}
+        if args_override is not None:
+            meta_payload["args_override_keys"] = sorted(args_override.keys())
+        self.append_meta_event("gate_decision", meta_payload)
         return True
 
     async def await_gate(
-        self, call_id: str, name: str, args: dict[str, Any], emit, timeout: float = 300.0,
-    ) -> str:
+        self,
+        call_id: str,
+        name: str,
+        args: dict[str, Any],
+        emit,
+        *,
+        fs_diff: Optional[dict[str, Any]] = None,
+        timeout: float = 300.0,
+    ) -> tuple[str, Optional[dict[str, Any]]]:
         ev = asyncio.Event()
         self._gate_events[call_id] = ev
-        await emit(GateEvent(id=call_id, name=name, args=args))
+        await emit(GateEvent(id=call_id, name=name, args=args, fs_diff=fs_diff))
         try:
             await asyncio.wait_for(ev.wait(), timeout=timeout)
-            return self._gate_decisions.get(call_id, "deny")
+            decision = self._gate_decisions.get(call_id, "deny")
+            override = self._gate_args_overrides.pop(call_id, None)
+            return decision, override
         except asyncio.TimeoutError:
-            return "deny"
+            self._gate_args_overrides.pop(call_id, None)
+            return "deny", None
         finally:
             self._gate_events.pop(call_id, None)
 

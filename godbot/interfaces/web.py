@@ -132,10 +132,13 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
         body = await request.json()
         sid = body["session_id"]
         decision = body["decision"]
+        args_override = body.get("args_override")
+        if args_override is not None and not isinstance(args_override, dict):
+            raise HTTPException(400, "args_override must be an object")
         session = _sessions_cache.get(sid)
         if session is None:
             raise HTTPException(404, "no active session")
-        ok = session.resolve_gate(call_id, decision)
+        ok = session.resolve_gate(call_id, decision, args_override=args_override)
         return {"ok": ok}
 
     @app.post("/api/stop")

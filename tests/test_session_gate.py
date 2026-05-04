@@ -21,8 +21,10 @@ async def test_gate_resolves_with_allow(tmp_path):
     async def caller():
         return await s.await_gate("c1", "run_powershell", {"cmd": "ls"}, emit, timeout=2)
 
-    decision, _ = await asyncio.gather(caller(), resolver())
+    (decision_pair, _resolver_done) = await asyncio.gather(caller(), resolver())
+    decision, override = decision_pair
     assert decision == "allow"
+    assert override is None
     assert any(e.__class__.__name__ == "GateEvent" for e in emitted)
 
 
@@ -33,5 +35,6 @@ async def test_gate_times_out_to_deny(tmp_path):
     async def emit(ev):
         pass
 
-    decision = await s.await_gate("c1", "x", {}, emit, timeout=0.1)
+    decision, override = await s.await_gate("c1", "x", {}, emit, timeout=0.1)
     assert decision == "deny"
+    assert override is None

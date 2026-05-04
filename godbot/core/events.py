@@ -28,6 +28,11 @@ class GateEvent:
     id: str
     name: str
     args: dict[str, Any]
+    # Optional FS-write diff payload: {path, before, after}. Populated for
+    # write_file/edit_file gates so UIs can render an inline diff. None for
+    # all other gated tools (run_powershell, etc.) — UIs fall through to the
+    # standard gate card in that case.
+    fs_diff: Optional[dict[str, Any]] = None
 
 
 @dataclass(frozen=True)

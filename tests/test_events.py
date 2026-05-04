@@ -32,7 +32,18 @@ def test_tool_result_event_no_blob():
 
 def test_gate_event_serializes():
     e = GateEvent(id="c1", name="run_powershell", args={"cmd": "ls"})
-    assert event_to_dict(e) == {"type": "gate", "id": "c1", "name": "run_powershell", "args": {"cmd": "ls"}}
+    assert event_to_dict(e) == {
+        "type": "gate", "id": "c1", "name": "run_powershell",
+        "args": {"cmd": "ls"}, "fs_diff": None,
+    }
+
+
+def test_gate_event_with_fs_diff_serializes():
+    diff = {"path": "x.py", "before": "old\n", "after": "new\n"}
+    e = GateEvent(id="c1", name="write_file", args={"path": "x.py", "content": "new\n"}, fs_diff=diff)
+    d = event_to_dict(e)
+    assert d["type"] == "gate"
+    assert d["fs_diff"] == diff
 
 
 def test_error_event_serializes():
@@ -53,6 +64,10 @@ def test_done_event_serializes():
         ToolResultEvent(id="c1", preview="ok", blob="c1", duration_ms=12),
         ToolResultEvent(id="c2", preview="ok", blob=None, duration_ms=0),
         GateEvent(id="c1", name="run_powershell", args={"cmd": "ls"}),
+        GateEvent(
+            id="c2", name="write_file", args={"path": "x.py", "content": "y"},
+            fs_diff={"path": "x.py", "before": "z", "after": "y"},
+        ),
         ErrorEvent(message="boom", recoverable=False),
         ErrorEvent(message="retry me", recoverable=True),
         DoneEvent(step_count=3),
