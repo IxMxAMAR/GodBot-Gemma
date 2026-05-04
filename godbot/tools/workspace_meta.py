@@ -105,6 +105,28 @@ def _toplevel_listing(repo: Path) -> str:
 
 
 @tool()
+def which(name: str) -> str:
+    """Locate a CLI binary on PATH (sub-project 53).
+
+    Returns ``found: <full path>`` when ``name`` resolves, or
+    ``not found: <name>`` otherwise. Useful when the agent wants to
+    decide between two paths (e.g. "use pytest if installed, else
+    fall back to run_python on the test file") or to surface a
+    helpful "install X first" hint for the user.
+
+    Non-dangerous; pure read on PATH. Resolves the *first* match —
+    same behavior as POSIX which / Windows where.exe.
+    """
+    import shutil as _shutil
+    if not name:
+        return "[error] name required"
+    found = _shutil.which(name)
+    if found is None:
+        return f"not found: {name}"
+    return f"found: {found}"
+
+
+@tool()
 def check_python_syntax(path: str = "", code: str = "") -> str:
     """Validate that a file or snippet is syntactically valid Python (sub-project 50).
 
