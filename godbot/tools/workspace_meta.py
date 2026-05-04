@@ -681,6 +681,89 @@ def list_env(prefix: str = "", max_results: int = 30) -> str:
 
 
 @tool()
+def csv_summary(path: str, sample_rows: int = 5) -> str:
+    """Quick overview of a CSV file (sub-project 78).
+
+    Reports delimiter (auto-sniffed), column names, row count, and a
+    sample of the first N rows (default 5, capped at 50). Workspace-
+    confined.
+
+    Output:
+
+      file: <abs path>
+      delimiter: ','
+      columns (5): a, b, c, d, e
+      rows: 1234
+      sample (3 of 1234):
+        row 1: a=1, b=2, c=3, d=4, e=5
+        row 2: ...
+
+    Useful as first-look reconnaissance before deciding how to process
+    a data file.
+    """
+    import csv as _csv
+    from pathlib import Path as _Path
+
+    if not path:
+        return "[error] path required"
+    ws = current_workspace()
+    p = _Path(path)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    if not p.is_file():
+        return f"[error] not a file: {p}"
+
+    try:
+        with open(p, "r", encoding="utf-8", errors="replace", newline="") as f:
+            head_sample = f.read(8192)
+            try:
+                dialect = _csv.Sniffer().sniff(head_sample, delimiters=",;\t|")
+                delimiter = dialect.delimiter
+            except _csv.Error:
+                dialect = _csv.excel
+                delimiter = ","
+            f.seek(0)
+            reader = _csv.reader(f, dialect=dialect)
+            try:
+                header = next(reader)
+            except StopIteration:
+                return f"file: {p}\n(empty)"
+            cap = max(1, min(int(sample_rows), 50))
+            rows: list[list[str]] = []
+            row_count = 0
+            for r in reader:
+                row_count += 1
+                if len(rows) < cap:
+                    rows.append(r)
+    except Exception as e:
+        return f"[error] read failed: {type(e).__name__}: {e}"
+
+    parts = [
+        f"file: {p}",
+        f"delimiter: {delimiter!r}",
+        f"columns ({len(header)}): {', '.join(header)}",
+        f"rows: {row_count}",
+    ]
+    if rows:
+        parts.append(f"sample ({len(rows)} of {row_count}):")
+        for i, r in enumerate(rows, 1):
+            kv = ", ".join(
+                f"{header[j]}={r[j]}" for j in range(min(len(header), len(r)))
+            )
+            parts.append(f"  row {i}: {kv}")
+    return "\n".join(parts)
+
+
+@tool()
 def text_replace(text: str, old: str, new: str, count: int = -1) -> str:
     """Replace ``old`` with ``new`` in ``text`` (sub-project 77).
 
