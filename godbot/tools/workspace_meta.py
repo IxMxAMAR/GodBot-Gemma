@@ -681,6 +681,79 @@ def list_env(prefix: str = "", max_results: int = 30) -> str:
 
 
 @tool()
+def count_files(pattern: str = "**/*", root: str = ".", max_count: int = 10_000) -> str:
+    """Count files matching a recursive glob pattern (sub-project 76).
+
+    Workspace-confined; ``root`` defaults to the workspace root.
+    ``pattern`` is a glob (default ``**/*`` for recursive everything).
+    Skips ``.git``, ``__pycache__``, ``.venv``, ``node_modules``, and
+    similar high-volume noise dirs.
+
+    Output:
+
+      pattern: <pattern>
+      root: <abs path>
+      total: <N> file(s)
+      by extension (top 10):
+        .py: 42
+        .md: 12
+        ...
+
+    Cheaper than directory_size when only counts (not bytes) matter.
+    """
+    from collections import Counter
+    from pathlib import Path as _Path
+
+    ws = current_workspace()
+    p = _Path(root)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {root!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    if not p.is_dir():
+        return f"[error] not a directory: {p}"
+
+    SKIPS = {".git", "__pycache__", ".venv", "venv", "node_modules",
+             "dist", "build", ".pytest_cache"}
+    cap = max(1, min(int(max_count), 200_000))
+    total = 0
+    by_ext: Counter[str] = Counter()
+    truncated = False
+    try:
+        for path in p.rglob(pattern):
+            if not path.is_file():
+                continue
+            if any(part in SKIPS for part in path.parts):
+                continue
+            total += 1
+            ext = path.suffix.lower() or "(no ext)"
+            by_ext[ext] += 1
+            if total >= cap:
+                truncated = True
+                break
+    except OSError as e:
+        return f"[error] glob failed: {e}"
+
+    parts = [
+        f"pattern: {pattern}",
+        f"root: {p}",
+        f"total: {total} file(s){' (capped)' if truncated else ''}",
+    ]
+    if by_ext:
+        parts.append("by extension (top 10):")
+        for ext, n in by_ext.most_common(10):
+            parts.append(f"  {ext}: {n}")
+    return "\n".join(parts)
+
+
+@tool()
 def parse_url(url: str) -> str:
     """Parse a URL into structured components (sub-project 74).
 
