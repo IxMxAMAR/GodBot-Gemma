@@ -49,6 +49,7 @@ godbot-cli = "godbot.interfaces.cli:main"
 godbot-tui = "godbot.interfaces.tui:main"
 godbot-index = "godbot.index:main"
 godbot-discord = "godbot.interfaces.discord_bot.bot:main"
+godbot-mcp-server = "godbot.mcp.server:main"
 
 [tool.setuptools.packages.find]
 include = ["godbot*"]
