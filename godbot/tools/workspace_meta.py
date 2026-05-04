@@ -1289,6 +1289,57 @@ def regex_search(pattern: str, text: str, max_matches: int = 20, ignore_case: bo
 
 
 @tool()
+def is_binary_file(path: str) -> str:
+    """Heuristic check whether a file is binary (sub-project 95).
+
+    Reads the first 8 KB and reports ``yes``/``no`` based on:
+    presence of NUL bytes, or > 30% non-printable bytes outside the
+    standard whitespace set. Workspace-confined.
+
+    Returns one of:
+
+      yes: <path> (reason: null-byte / non-printable ratio X.XX)
+      no:  <path>
+
+    Useful before ``read_file``/``head``/``tail`` on an unknown blob —
+    avoids spamming the agent's context with mojibake from a JPEG.
+    """
+    from pathlib import Path as _Path
+    if not path:
+        return "[error] path required"
+    ws = current_workspace()
+    p = _Path(path)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    if not p.is_file():
+        return f"[error] not a file: {p}"
+
+    try:
+        with open(p, "rb") as f:
+            head = f.read(8192)
+    except Exception as e:
+        return f"[error] read failed: {type(e).__name__}: {e}"
+    if not head:
+        return f"no:  {p} (empty)"
+    if b"\x00" in head:
+        return f"yes: {p} (reason: null-byte)"
+    textish = sum(1 for b in head if 32 <= b < 127 or b in (9, 10, 13))
+    ratio = textish / len(head)
+    if ratio < 0.7:
+        return f"yes: {p} (reason: non-printable ratio {1 - ratio:.2f})"
+    return f"no:  {p}"
+
+
+@tool()
 def file_info(path: str) -> str:
     """Report a file's metadata (sub-project 69).
 
