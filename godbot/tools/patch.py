@@ -243,6 +243,85 @@ def _confine_or_error(path: str) -> tuple[str, str | None]:
         return "", f"[error] sandbox: {e}"
 
 
+def _count_hunk_changes(hunk: Hunk) -> tuple[int, int]:
+    """Return (additions, deletions) for one hunk."""
+    adds = sum(1 for ln in hunk.lines if ln.startswith("+"))
+    dels = sum(1 for ln in hunk.lines if ln.startswith("-"))
+    return adds, dels
+
+
+@tool()
+def preview_patch(patch: str, fuzzy: bool = False) -> str:
+    """Dry-run a unified-diff patch — report what it would change, write nothing.
+
+    Same parsing + anchoring as ``apply_patch``, but never writes. For
+    each file in the patch, emits one line:
+
+        ok path  +N -M  (H hunks)
+
+    or, on any failure:
+
+        FAIL path: <reason>
+
+    A summary line at the bottom totals additions/deletions/files. Use
+    this to validate a patch (e.g. before sending it through gate
+    machinery) or to give the user a structured diff stat without
+    committing the changes.
+
+    Non-dangerous — no FS writes.
+    """
+    try:
+        diffs = parse_patch(patch)
+    except ValueError as e:
+        return f"[error] parse: {e}"
+    lines: list[str] = []
+    total_add = 0
+    total_del = 0
+    ok_files = 0
+    failed_files = 0
+    for fd in diffs:
+        confined, err = _confine_or_error(fd.path)
+        if err:
+            lines.append(f"FAIL {fd.path}: {err}")
+            failed_files += 1
+            continue
+        p = Path(confined)
+        if not p.exists() or not p.is_file():
+            lines.append(f"FAIL {fd.path}: file not found")
+            failed_files += 1
+            continue
+        try:
+            current = p.read_text(encoding="utf-8")
+        except Exception as e:
+            lines.append(f"FAIL {fd.path}: read failed: {type(e).__name__}: {e}")
+            failed_files += 1
+            continue
+        try:
+            _apply_hunks(current, fd.hunks, fuzzy=fuzzy)
+        except ValueError as e:
+            lines.append(f"FAIL {fd.path}: {e}")
+            failed_files += 1
+            continue
+        adds = 0
+        dels = 0
+        for h in fd.hunks:
+            a, d = _count_hunk_changes(h)
+            adds += a
+            dels += d
+        lines.append(
+            f"ok {fd.path}  +{adds} -{dels}  ({len(fd.hunks)} hunk{'' if len(fd.hunks) == 1 else 's'})"
+        )
+        ok_files += 1
+        total_add += adds
+        total_del += dels
+    summary = (
+        f"summary: {ok_files} file{'' if ok_files == 1 else 's'} ok, "
+        f"{failed_files} failed; +{total_add} -{total_del} total"
+    )
+    lines.append(summary)
+    return "\n".join(lines)
+
+
 @tool(dangerous=True)
 def apply_patch(patch: str, fuzzy: bool = False) -> str:
     """Apply a unified-diff patch to one or more workspace files.
