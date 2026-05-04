@@ -105,6 +105,79 @@ def _toplevel_listing(repo: Path) -> str:
 
 
 @tool()
+def find_imports(path: str) -> str:
+    """List the imports in a Python file (sub-project 47).
+
+    Parses the file with ``ast`` and reports two sections:
+
+      direct: <one per line — `import foo` / `import foo.bar`>
+      from:   <one per line — `from x import y, z`>
+
+    Useful for "what does this file depend on?" reasoning before
+    refactoring or tracing dataflow. Workspace-confined; only Python
+    files (``.py``). Returns ``[error] ...`` on parse failure with
+    line:col from the SyntaxError.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    if not path:
+        return "[error] path required"
+    ws = current_workspace()
+    p = _Path(path)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    if not p.is_file():
+        return f"[error] not a file: {p}"
+    if p.suffix != ".py":
+        return f"[error] not a Python file: {p}"
+    try:
+        source = p.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return f"[error] read failed: {type(e).__name__}: {e}"
+    try:
+        tree = ast.parse(source, filename=str(p))
+    except SyntaxError as e:
+        return f"[error] syntax: line {e.lineno} col {e.offset}: {e.msg}"
+
+    direct: list[str] = []
+    from_imports: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                rendered = alias.name + (f" as {alias.asname}" if alias.asname else "")
+                direct.append(f"import {rendered}")
+        elif isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            dots = "." * (node.level or 0)
+            target = f"{dots}{mod}"
+            names = ", ".join(
+                a.name + (f" as {a.asname}" if a.asname else "") for a in node.names
+            )
+            from_imports.append(f"from {target} import {names}")
+
+    if not direct and not from_imports:
+        return f"{p}: (no imports)"
+    parts = [f"file: {p}"]
+    if direct:
+        parts.append(f"direct ({len(direct)}):")
+        parts.extend(f"  {ln}" for ln in direct)
+    if from_imports:
+        parts.append(f"from ({len(from_imports)}):")
+        parts.extend(f"  {ln}" for ln in from_imports)
+    return "\n".join(parts)
+
+
+@tool()
 def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
     """Show a unified diff between two workspace files (sub-project 46).
 
