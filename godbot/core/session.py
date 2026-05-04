@@ -207,6 +207,20 @@ class Session:
         self._save_meta()
 
     @property
+    def pinned(self) -> bool:
+        """Whether the session is pinned (sub-project 52).
+
+        Pinned sessions are protected from bulk cleanup. They can still
+        be deleted explicitly via DELETE /api/sessions/{sid}.
+        """
+        return bool(self._meta.get("pinned", False))
+
+    def set_pinned(self, value: bool) -> None:
+        """Pin or unpin the session."""
+        self._meta["pinned"] = bool(value)
+        self._save_meta()
+
+    @property
     def usage(self) -> dict[str, int]:
         """Cumulative token usage for this session.
 

@@ -1502,6 +1502,29 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             raise HTTPException(404, "no such session")
         return s.feedback_summary()
 
+    @app.post("/api/sessions/{sid}/pin")
+    async def session_pin(sid: str, request: Request):
+        """Pin or unpin a session (sub-project 52).
+
+        Body: ``{pinned: bool}``. Pinned sessions are protected from
+        ``POST /api/sessions/cleanup`` bulk-delete; they can still be
+        removed explicitly via DELETE. Useful for favorite reference
+        transcripts you don't want garbage-collected.
+        """
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        if not isinstance(body, dict) or "pinned" not in body:
+            raise HTTPException(400, "pinned (bool) required in body")
+        s.set_pinned(bool(body["pinned"]))
+        return {"ok": True, "pinned": s.pinned}
+
     @app.delete("/api/sessions/{sid}")
     async def session_delete(sid: str):
         """Permanently delete a session (sub-project 34).
@@ -1568,6 +1591,10 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
                 s = Session.load(sessions_root, sdir.name)
             except Exception:
                 # Bad meta — count as kept rather than blow it away.
+                kept += 1
+                continue
+            # Sub-project 52: pinned sessions are exempt from bulk cleanup.
+            if s.pinned:
                 kept += 1
                 continue
             started = s._meta.get("started_at")
