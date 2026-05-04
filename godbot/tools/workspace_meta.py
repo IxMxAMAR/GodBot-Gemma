@@ -1461,6 +1461,56 @@ def text_metrics(text: str = "", path: str = "") -> str:
 
 
 @tool()
+def system_info() -> str:
+    """Report host hardware + OS at a glance (sub-project 85).
+
+    Output:
+
+      os: <platform string>
+      python: <version>
+      cpu_count: <logical cores>
+      memory_gb: <total / available>     (when psutil is available)
+      disk_free_gb: <root free space>    (when shutil.disk_usage works)
+      cwd: <current working directory>
+
+    Useful when the agent needs to make resource-aware decisions:
+    "do I have enough RAM to load this model?", "is the disk full
+    before I run this build?". psutil is a soft dep — we degrade
+    gracefully when it isn't installed.
+    """
+    import os as _os
+    import shutil as _shutil
+    import sys as _sys
+
+    parts: list[str] = []
+    parts.append(f"os: {_sys.platform}")
+    parts.append(f"python: {_sys.version.split()[0]}")
+    parts.append(f"cpu_count: {_os.cpu_count() or 'unknown'}")
+
+    try:
+        import psutil  # type: ignore[import-not-found]
+        vm = psutil.virtual_memory()
+        parts.append(
+            f"memory_gb: {vm.total / 1024**3:.1f} total / {vm.available / 1024**3:.1f} available"
+        )
+    except ImportError:
+        parts.append("memory_gb: (psutil not installed)")
+    except Exception as e:
+        parts.append(f"memory_gb: (psutil error: {e})")
+
+    try:
+        from pathlib import Path as _Path
+        anchor = _Path(_os.environ.get("SystemDrive", "/") + _os.sep) if _sys.platform == "win32" else _Path("/")
+        usage = _shutil.disk_usage(str(anchor))
+        parts.append(f"disk_free_gb: {usage.free / 1024**3:.1f} (anchor {anchor})")
+    except Exception as e:
+        parts.append(f"disk_free_gb: (lookup failed: {e})")
+
+    parts.append(f"cwd: {_os.getcwd()}")
+    return "\n".join(parts)
+
+
+@tool()
 def python_info() -> str:
     """Report the Python interpreter, version, prefix, and key installed
     packages (sub-project 64).
