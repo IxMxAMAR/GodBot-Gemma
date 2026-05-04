@@ -945,6 +945,74 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
         )
         return cost.to_dict()
 
+    @app.get("/api/audit")
+    async def audit_dangerous_calls(limit: int = 100):
+        """Log of dangerous-tool invocations across all sessions (sub-project 40).
+
+        Walks every session's events.jsonl, finds ``assistant_tool_call``
+        events whose tool name is currently flagged dangerous in the
+        registry, and pairs them with the matching ``tool_result`` so
+        the caller sees what actually happened. Newest-first; capped at
+        ``limit`` (default 100).
+
+        Use case: post-incident review — "did the agent run any
+        write_file or run_powershell I don't remember approving?"
+
+        Each entry: ``{session_id, started_at, call_id, name, args,
+        result_preview, gated}``. ``gated`` is True iff the daemon's
+        gate machinery would have prompted (some are auto-approved by
+        sandbox or yolo flags; the audit doesn't differentiate which
+        path was taken — it just shows the call happened).
+        """
+        from godbot.core.registry import DEFAULT
+
+        dangerous_names = {t.name for t in DEFAULT.all() if t.dangerous}
+        out: list[dict] = []
+        if not sessions_root.exists():
+            return {"calls": []}
+        for sdir in sorted(sessions_root.iterdir(), reverse=True):
+            if not sdir.is_dir():
+                continue
+            try:
+                s = Session.load(sessions_root, sdir.name)
+            except Exception:
+                continue
+            # Walk events sequentially, indexing tool_call by id so we can
+            # match a tool_result that follows.
+            pending: dict[str, dict] = {}
+            for ev in s._events():
+                t = ev.get("type")
+                if t == "assistant_tool_call":
+                    name = ev.get("name")
+                    if name in dangerous_names:
+                        pending[ev.get("call_id", "")] = {
+                            "session_id": s.id,
+                            "started_at": s._meta.get("started_at"),
+                            "call_id": ev.get("call_id"),
+                            "name": name,
+                            "args": ev.get("args") or {},
+                            "result_preview": "",
+                            "gated": True,
+                        }
+                elif t == "tool_result":
+                    cid = ev.get("call_id")
+                    if cid in pending:
+                        # Stash a preview (LLM-truncated) and finalise.
+                        pending[cid]["result_preview"] = (ev.get("content") or "")[:300]
+                        out.append(pending.pop(cid))
+                if len(out) >= int(limit):
+                    break
+            # Flush any tool_call entries that had no matching result
+            # (e.g. cancelled mid-flight). Mark result_preview accordingly.
+            for entry in pending.values():
+                entry["result_preview"] = "(no result recorded — cancelled or in-flight)"
+                out.append(entry)
+                if len(out) >= int(limit):
+                    break
+            if len(out) >= int(limit):
+                break
+        return {"calls": out[:limit]}
+
     @app.get("/api/stats")
     async def stats():
         """Aggregate metrics across all sessions on disk (sub-project 32).
