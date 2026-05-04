@@ -33,6 +33,11 @@ from godbot.mcp import boot_mcp as _boot_mcp  # noqa: E402
 _boot_mcp()
 
 
+# Daemon start time — used by /api/health/details to report uptime.
+import time as _time
+_DAEMON_STARTED_AT = _time.time()
+
+
 # Shared per-process state.
 # Per-session event logs replace the legacy single-consumer queue
 # (sub-project 21). EventLog is a sequence-numbered ring buffer with
@@ -903,6 +908,80 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
     @app.get("/api/health")
     async def health():
         return {"status": "ok"}
+
+    @app.get("/api/health/details")
+    async def health_details():
+        """Enriched health diagnostics (sub-project 43).
+
+        Returns a structured snapshot the Studio status bar (and any
+        external monitor) can consume:
+
+          {
+            status: "ok",
+            version: <package version>,
+            uptime_seconds: <int>,
+            providers: {default: name, configured: [name, ...]},
+            mcp_servers: [{name, connected, error?, tool_count}],
+            tools: {total: int, dangerous: int},
+            sessions: {count: int},
+            background_tasks: {running: int, total: int},
+          }
+
+        Read-only and cheap — no provider probes, no FS walk except to
+        count session directories.
+        """
+        import time
+        from godbot.core.registry import DEFAULT
+        from godbot.core.tasks import DEFAULT_RUNNER
+
+        cfg = load_config()
+        # MCP server status from the registered clients (see godbot.mcp).
+        try:
+            from godbot.mcp.registry_bridge import _clients as _mcp_clients
+        except Exception:
+            _mcp_clients = {}
+        mcp_status = []
+        for name, scfg in cfg.mcp.servers.items():
+            client = _mcp_clients.get(name)
+            mcp_status.append({
+                "name": name,
+                "connected": bool(client and client.connected),
+                "error": client.connect_error if (client and client.connect_error) else None,
+                "tool_count": len(client.tools) if (client and client.connected) else 0,
+            })
+
+        all_tools = DEFAULT.all()
+        session_count = sum(
+            1 for d in sessions_root.iterdir() if d.is_dir() and (d / "meta.json").exists()
+        ) if sessions_root.exists() else 0
+
+        tasks = DEFAULT_RUNNER.list_tasks()
+        running_tasks = sum(1 for t in tasks if t.status in ("pending", "running"))
+
+        # Read package version from importlib.metadata so we don't have
+        # to keep a literal in two places.
+        try:
+            from importlib.metadata import version as _version
+            pkg_version = _version("godbot")
+        except Exception:
+            pkg_version = "0.0.0"
+
+        return {
+            "status": "ok",
+            "version": pkg_version,
+            "uptime_seconds": int(time.time() - _DAEMON_STARTED_AT),
+            "providers": {
+                "default": cfg.providers.default,
+                "configured": list(cfg.providers.items.keys()),
+            },
+            "mcp_servers": mcp_status,
+            "tools": {
+                "total": len(all_tools),
+                "dangerous": sum(1 for t in all_tools if t.dangerous),
+            },
+            "sessions": {"count": session_count},
+            "background_tasks": {"running": running_tasks, "total": len(tasks)},
+        }
 
     @app.post("/api/cost/estimate")
     async def cost_estimate(request: Request):
