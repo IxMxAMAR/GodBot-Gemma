@@ -105,6 +105,69 @@ def _toplevel_listing(repo: Path) -> str:
 
 
 @tool()
+def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
+    """Show a unified diff between two workspace files (sub-project 46).
+
+    Both paths are workspace-confined when a workspace is active.
+    Output is standard unified-diff format with up to ``max_lines``
+    of context-and-change lines (capped to keep the agent's context
+    manageable on big diffs).
+
+    Returns a one-line "files identical" message when the contents
+    match exactly. Non-dangerous; read-only.
+    """
+    import difflib
+    from pathlib import Path as _Path
+
+    if not path_a or not path_b:
+        return "[error] both path_a and path_b are required"
+    ws = current_workspace()
+
+    def resolve(p: str) -> tuple[_Path | None, str | None]:
+        path = _Path(p)
+        if not path.is_absolute() and ws is not None:
+            path = ws.root / path
+        try:
+            path = path.resolve()
+        except OSError as e:
+            return None, f"[error] cannot resolve {p!r}: {e}"
+        if ws is not None:
+            try:
+                path.relative_to(ws.root)
+            except ValueError:
+                return None, f"[error] {path} is outside the active workspace"
+        if not path.is_file():
+            return None, f"[error] not a file: {path}"
+        return path, None
+
+    pa, err = resolve(path_a)
+    if err:
+        return err
+    pb, err = resolve(path_b)
+    if err:
+        return err
+
+    try:
+        content_a = pa.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+        content_b = pb.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    except Exception as e:
+        return f"[error] read failed: {type(e).__name__}: {e}"
+
+    if content_a == content_b:
+        return f"files identical: {pa} == {pb}"
+
+    diff_lines = list(difflib.unified_diff(
+        content_a, content_b,
+        fromfile=str(pa), tofile=str(pb),
+        lineterm="",
+    ))
+    if len(diff_lines) > max_lines:
+        diff_lines = diff_lines[:max_lines]
+        diff_lines.append(f"... [truncated at {max_lines} lines]")
+    return "\n".join(diff_lines)
+
+
+@tool()
 def validate_json(text: str = "", path: str = "") -> str:
     """Validate that ``text`` (or the contents of ``path``) is well-formed JSON.
 
