@@ -944,6 +944,112 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
     async def health():
         return {"status": "ok"}
 
+    @app.post("/api/agent/raw_completion")
+    async def agent_raw_completion(request: Request):
+        """Direct LLM passthrough — no agent loop, no ReAct framing
+        (sub-project 73).
+
+        Body:
+          {
+            messages: [{role, content}, ...],   required
+            provider?: str,                     defaults to cfg.providers.default
+            model?: str,                        defaults to provider's default
+            temperature?: float = 0.7,
+            max_tokens?: int = 2048,
+          }
+
+        Returns ``{content, finish_reason, usage, model}``.
+
+        Power-user primitive: useful for custom prompt experiments,
+        comparing models on the same prompt, or running a vanilla
+        completion against the configured provider without going
+        through the agent's tool-call machinery.
+
+        OpenAI-compat providers only for now (Anthropic / Gemini have
+        their own message shapes — fall through with HTTP 501).
+        """
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        messages = body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise HTTPException(400, "messages (non-empty list) required")
+        for m in messages:
+            if not isinstance(m, dict) or "role" not in m or "content" not in m:
+                raise HTTPException(400, "each message needs role + content")
+
+        cfg = load_config()
+        provider_name = body.get("provider") or cfg.providers.default or "lmstudio"
+        item = cfg.providers.items.get(provider_name)
+        if item is None:
+            raise HTTPException(
+                400, f"provider {provider_name!r} not configured",
+            )
+        from godbot.core.completion import _is_openai_compatible
+        if not _is_openai_compatible(provider_name):
+            raise HTTPException(
+                501, f"provider {provider_name!r} not yet supported for raw_completion",
+            )
+
+        model = body.get("model") or item.default_model or "auto"
+        if model == "auto":
+            try:
+                pcfg = ProviderConfigType(
+                    name=provider_name, base_url=item.base_url,
+                    api_key=item.api_key
+                    or (item.api_key_env and os.environ.get(item.api_key_env, "") or ""),
+                    default_model=item.default_model,
+                )
+                provider_inst = get_provider_factory(provider_name, pcfg)
+                resolved = await provider_inst.select_model("auto")
+                model = resolved.id
+            except Exception as e:
+                raise HTTPException(503, f"could not resolve model: {e}")
+
+        api_key = item.api_key
+        if not api_key and item.api_key_env:
+            api_key = os.environ.get(item.api_key_env, "")
+        try:
+            temperature = float(body.get("temperature", 0.7))
+            max_tokens = int(body.get("max_tokens", 2048))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "temperature must be a float, max_tokens an int")
+
+        import httpx as _httpx
+        url = f"{item.base_url.rstrip('/')}/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key or 'lm-studio'}"}
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+        try:
+            async with _httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(url, headers=headers, json=payload)
+                r.raise_for_status()
+                data = r.json()
+        except _httpx.HTTPError as e:
+            raise HTTPException(502, f"upstream failed: {type(e).__name__}: {e}")
+
+        choices = data.get("choices") or []
+        if not choices:
+            raise HTTPException(502, "upstream returned no choices")
+        msg = choices[0].get("message") or {}
+        content = str(msg.get("content") or "")
+        finish_reason = str(choices[0].get("finish_reason") or "stop")
+        usage_raw = data.get("usage") or {}
+        inp = int(usage_raw.get("input_tokens") or usage_raw.get("prompt_tokens") or 0)
+        out = int(usage_raw.get("output_tokens") or usage_raw.get("completion_tokens") or 0)
+        total = int(usage_raw.get("total_tokens") or (inp + out))
+        return {
+            "content": content,
+            "finish_reason": finish_reason,
+            "usage": {"input_tokens": inp, "output_tokens": out, "total_tokens": total},
+            "model": model,
+        }
+
     @app.post("/api/agent/dry_run")
     async def agent_dry_run(request: Request):
         """Render the system prompt + tool catalog WITHOUT invoking the model
