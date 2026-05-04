@@ -681,6 +681,73 @@ def list_env(prefix: str = "", max_results: int = 30) -> str:
 
 
 @tool()
+def tree(path: str = ".", max_depth: int = 2, max_entries: int = 200) -> str:
+    """Render a directory tree as ASCII (sub-project 81).
+
+    Workspace-confined. ``max_depth`` caps recursion depth (default 2,
+    hard cap 6). ``max_entries`` caps total lines so huge trees stay
+    scannable. Skips ``.git``/__pycache__/.venv/node_modules etc.
+
+    Output uses ``├── name/`` / ``└── leaf`` glyphs. Useful for first-
+    look "show me the project layout" reconnaissance.
+    """
+    from pathlib import Path as _Path
+
+    ws = current_workspace()
+    p = _Path(path)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    if not p.is_dir():
+        return f"[error] not a directory: {p}"
+
+    SKIPS = {".git", "__pycache__", ".venv", "venv", "node_modules",
+             "dist", "build", ".pytest_cache", ".mypy_cache",
+             ".ruff_cache", ".tox"}
+    depth_cap = max(0, min(int(max_depth), 6))
+    entry_cap = max(1, min(int(max_entries), 5000))
+
+    lines: list[str] = [str(p)]
+    truncated = False
+
+    def walk(directory: _Path, prefix: str, depth: int) -> None:
+        nonlocal truncated
+        if truncated or depth > depth_cap:
+            return
+        try:
+            children = sorted(
+                directory.iterdir(),
+                key=lambda x: (not x.is_dir(), x.name.lower()),
+            )
+        except OSError:
+            return
+        children = [c for c in children if c.name not in SKIPS]
+        last_idx = len(children) - 1
+        for i, child in enumerate(children):
+            if len(lines) >= entry_cap:
+                lines.append(prefix + "... [truncated]")
+                truncated = True
+                return
+            connector = "└── " if i == last_idx else "├── "
+            suffix = "/" if child.is_dir() else ""
+            lines.append(prefix + connector + child.name + suffix)
+            if child.is_dir():
+                next_prefix = prefix + ("    " if i == last_idx else "│   ")
+                walk(child, next_prefix, depth + 1)
+
+    walk(p, "", 1)
+    return "\n".join(lines)
+
+
+@tool()
 def csv_summary(path: str, sample_rows: int = 5) -> str:
     """Quick overview of a CSV file (sub-project 78).
 
