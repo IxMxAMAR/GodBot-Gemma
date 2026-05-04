@@ -372,6 +372,26 @@ def _register_endpoints(app: FastAPI, sessions_root: Path) -> None:
             for t in DEFAULT.all()
         ]
 
+    @app.get("/api/tools/full")
+    async def tools_full():
+        """Full tool schemas (sub-project 87).
+
+        Like ``/api/tools`` but each entry also carries the JSON schema
+        of arguments and the per-tool timeout. Useful for clients that
+        want to drive a structured args UI (form generation) or
+        validate args client-side before sending.
+        """
+        return [
+            {
+                "name": t.name,
+                "description": t.description,
+                "dangerous": t.dangerous,
+                "timeout": t.timeout,
+                "schema": t.schema,
+            }
+            for t in DEFAULT.all()
+        ]
+
     @app.post("/api/tools/reload")
     async def tools_reload():
         """Re-import every godbot.tools.* module (sub-project 27).
