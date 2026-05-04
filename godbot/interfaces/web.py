@@ -1206,6 +1206,43 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             "protocol": s.protocol,
         }
 
+    @app.get("/api/workspaces")
+    async def workspaces_list():
+        """List distinct workspaces seen across all sessions (sub-project 44).
+
+        Walks every session's meta.json, collects unique
+        ``workspace_root`` values, and aggregates per-workspace stats:
+        last activity timestamp and session count. Useful for "give me
+        the projects I've touched this month" pickers.
+
+        Returns ``{workspaces: [{path, sessions, last_activity}]}``
+        ordered by last_activity desc.
+        """
+        from collections import defaultdict
+        agg: dict[str, dict] = {}
+        if not sessions_root.exists():
+            return {"workspaces": []}
+        for sdir in sessions_root.iterdir():
+            if not sdir.is_dir():
+                continue
+            try:
+                s = Session.load(sessions_root, sdir.name)
+            except Exception:
+                continue
+            ws = s._meta.get("workspace_root")
+            if not ws:
+                continue
+            entry = agg.setdefault(ws, {"path": ws, "sessions": 0, "last_activity": ""})
+            entry["sessions"] += 1
+            started = s._meta.get("started_at") or ""
+            if started > entry["last_activity"]:
+                entry["last_activity"] = started
+        out = sorted(
+            agg.values(),
+            key=lambda e: e["last_activity"], reverse=True,
+        )
+        return {"workspaces": out}
+
     @app.get("/api/sessions")
     async def sessions_list():
         out = []
