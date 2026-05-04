@@ -817,6 +817,36 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             raise HTTPException(404, "no such session")
         return s.usage
 
+    @app.get("/api/sessions/{sid}/blobs/{call_id}")
+    async def session_blob(sid: str, call_id: str, as_text: bool = False):
+        """Return the full tool-result blob for a given call (sub-project 26).
+
+        Tool results larger than 8 KB are persisted under
+        ``<session>/blobs/<call_id>.txt`` and the LLM view is truncated.
+        This endpoint surfaces the complete content — for the agent to
+        re-read its own elided output, or for the UI to render a "Show
+        full result" disclosure.
+
+        ``as_text=true`` switches to ``text/plain`` for raw downloads
+        (large logs); default is JSON ``{call_id, content, length}``.
+        """
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        try:
+            content = s.read_blob(call_id)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such blob")
+        if as_text:
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse(content)
+        return {
+            "call_id": call_id,
+            "length": len(content),
+            "content": content,
+        }
+
     @app.get("/api/sessions/{sid}/cost")
     async def session_cost(sid: str):
         """Estimated USD cost for one session (sub-project 23).
