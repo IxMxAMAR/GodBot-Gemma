@@ -1011,6 +1011,103 @@ def text_truncate(text: str, max_chars: int = 1000, suffix: str = "...") -> str:
 
 
 @tool()
+def find_files_by_age(
+    older_than_days: int = 0, newer_than_days: int = 0,
+    pattern: str = "**/*", root: str = ".", max_results: int = 100,
+) -> str:
+    """Find files matching a glob, filtered by modification age (sub-project 86).
+
+    Workspace-confined; ``root`` defaults to the workspace root.
+    ``older_than_days`` returns files mtime'd before that cutoff;
+    ``newer_than_days`` returns files mtime'd after. Pass exactly one
+    (set the other to 0). ``max_results`` capped at 1000.
+
+    Output:
+
+      pattern: <pattern>
+      mode: older_than 30 / newer_than 7
+      total: N matches
+      files (oldest first):
+        2025-04-12  /path/to/file.txt
+        ...
+
+    Use cases: cleanup ("what hasn't been touched in 90 days?"),
+    triage ("what changed in the last week?"), staleness checks.
+    """
+    from datetime import datetime, timedelta
+    from pathlib import Path as _Path
+
+    if older_than_days < 0 or newer_than_days < 0:
+        return "[error] day counts must be non-negative"
+    if older_than_days == 0 and newer_than_days == 0:
+        return "[error] supply older_than_days or newer_than_days (> 0)"
+    if older_than_days > 0 and newer_than_days > 0:
+        return "[error] use exactly one of older_than_days / newer_than_days"
+
+    ws = current_workspace()
+    p = _Path(root)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {root!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    if not p.is_dir():
+        return f"[error] not a directory: {p}"
+
+    SKIPS = {".git", "__pycache__", ".venv", "venv", "node_modules",
+             "dist", "build", ".pytest_cache"}
+    cap = max(1, min(int(max_results), 1000))
+    cutoff_secs = (
+        (datetime.now() - timedelta(days=older_than_days)).timestamp()
+        if older_than_days > 0
+        else (datetime.now() - timedelta(days=newer_than_days)).timestamp()
+    )
+    matches: list[tuple[float, _Path]] = []
+    try:
+        for path in p.rglob(pattern):
+            if not path.is_file():
+                continue
+            if any(part in SKIPS for part in path.parts):
+                continue
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if older_than_days > 0 and mtime < cutoff_secs:
+                matches.append((mtime, path))
+            elif newer_than_days > 0 and mtime > cutoff_secs:
+                matches.append((mtime, path))
+    except OSError as e:
+        return f"[error] glob failed: {e}"
+
+    matches.sort(key=lambda x: x[0])
+    truncated = len(matches) > cap
+    matches = matches[:cap]
+
+    mode_label = (
+        f"older_than {older_than_days}" if older_than_days > 0
+        else f"newer_than {newer_than_days}"
+    )
+    parts = [
+        f"pattern: {pattern}",
+        f"mode: {mode_label}",
+        f"total: {len(matches)} match(es){' (capped)' if truncated else ''}",
+    ]
+    if matches:
+        parts.append("files (oldest first):")
+        for mtime, path in matches:
+            ts = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+            parts.append(f"  {ts}  {path}")
+    return "\n".join(parts)
+
+
+@tool()
 def count_files(pattern: str = "**/*", root: str = ".", max_count: int = 10_000) -> str:
     """Count files matching a recursive glob pattern (sub-project 76).
 
