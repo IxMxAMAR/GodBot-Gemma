@@ -616,6 +616,63 @@ def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
 
 
 @tool()
+def text_metrics(text: str = "", path: str = "") -> str:
+    """Quick text statistics for inline text or a workspace file (sub-project 65).
+
+    Reports characters, bytes (UTF-8), words, lines, and the longest
+    line. Pass exactly one of ``text`` or ``path``.
+
+    Useful for "is this prompt too big?" sanity checks and "summarize
+    this file's shape" reconnaissance. Cheaper than count_tokens for
+    quick metrics — count_tokens is the right tool when you want a
+    token estimate; this one is the right tool for raw shape.
+    """
+    from pathlib import Path as _Path
+
+    if not text and not path:
+        return "[error] supply either `text` or `path`"
+    if text and path:
+        return "[error] supply only one of `text` or `path`"
+
+    body: str
+    label: str
+    if path:
+        ws = current_workspace()
+        p = _Path(path)
+        if not p.is_absolute() and ws is not None:
+            p = ws.root / p
+        try:
+            p = p.resolve()
+        except OSError as e:
+            return f"[error] cannot resolve {path!r}: {e}"
+        if ws is not None:
+            try:
+                p.relative_to(ws.root)
+            except ValueError:
+                return f"[error] {p} is outside the active workspace"
+        if not p.is_file():
+            return f"[error] not a file: {p}"
+        try:
+            body = p.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            return f"[error] read failed: {type(e).__name__}: {e}"
+        label = str(p)
+    else:
+        body = text
+        label = "<inline>"
+
+    lines = body.splitlines()
+    chars = len(body)
+    bytes_ = len(body.encode("utf-8"))
+    words = len(body.split())
+    longest = max((len(ln) for ln in lines), default=0)
+    return (
+        f"{label}: {chars} chars, {bytes_} bytes, {words} words, "
+        f"{len(lines)} lines, longest line {longest} chars"
+    )
+
+
+@tool()
 def python_info() -> str:
     """Report the Python interpreter, version, prefix, and key installed
     packages (sub-project 64).
