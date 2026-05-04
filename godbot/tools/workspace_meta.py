@@ -616,6 +616,91 @@ def compare_files(path_a: str, path_b: str, max_lines: int = 200) -> str:
 
 
 @tool()
+def format_json(text: str, indent: int = 2, sort_keys: bool = False) -> str:
+    """Pretty-print a JSON blob (sub-project 60).
+
+    Parses ``text``, re-serialises with ``indent`` spaces (1..8), and
+    returns the formatted output. Returns ``[error] ...`` on parse
+    failure. Useful when the agent generates a config / payload and
+    wants it readable before writing to disk. Optional ``sort_keys``
+    applies a deterministic key order.
+
+    Non-dangerous, in-memory only.
+    """
+    import json as _json
+
+    if not text:
+        return "[error] text required"
+    try:
+        parsed = _json.loads(text)
+    except _json.JSONDecodeError as e:
+        return f"[error] line {e.lineno} col {e.colno}: {e.msg}"
+    indent = max(1, min(int(indent), 8))
+    return _json.dumps(parsed, indent=indent, sort_keys=bool(sort_keys), ensure_ascii=False)
+
+
+@tool()
+def format_python(text: str = "", path: str = "") -> str:
+    """Re-serialise Python source via ast.unparse (sub-project 60).
+
+    Round-trips ``text`` (or the contents of ``path``) through
+    ``ast.parse`` + ``ast.unparse`` — normalises whitespace, removes
+    redundant parentheses, and matches the stdlib's canonical
+    formatting. **Comments are NOT preserved** (a known limitation
+    of ast.unparse); callers who need them should reach for a real
+    formatter via run_powershell + black.
+
+    Returns the formatted source, or ``[error] line:col: msg`` on
+    syntax failure. Non-dangerous; in-memory only.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    if not text and not path:
+        return "[error] supply either `text` or `path`"
+    if text and path:
+        return "[error] supply only one of `text` or `path`"
+
+    body: str
+    label: str
+    if path:
+        ws = current_workspace()
+        p = _Path(path)
+        if not p.is_absolute() and ws is not None:
+            p = ws.root / p
+        try:
+            p = p.resolve()
+        except OSError as e:
+            return f"[error] cannot resolve {path!r}: {e}"
+        if ws is not None:
+            try:
+                p.relative_to(ws.root)
+            except ValueError:
+                return f"[error] {p} is outside the active workspace"
+        if not p.is_file():
+            return f"[error] not a file: {p}"
+        if p.suffix != ".py":
+            return f"[error] not a Python file: {p}"
+        try:
+            body = p.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            return f"[error] read failed: {type(e).__name__}: {e}"
+        label = str(p)
+    else:
+        body = text
+        label = "<inline>"
+
+    try:
+        tree = ast.parse(body, filename=label)
+    except SyntaxError as e:
+        return f"[error] {label}: line {e.lineno} col {e.offset}: {e.msg}"
+    try:
+        return ast.unparse(tree)
+    except Exception as e:
+        return f"[error] {label}: unparse failed: {type(e).__name__}: {e}"
+
+
+@tool()
 def validate_json(text: str = "", path: str = "") -> str:
     """Validate that ``text`` (or the contents of ``path``) is well-formed JSON.
 
