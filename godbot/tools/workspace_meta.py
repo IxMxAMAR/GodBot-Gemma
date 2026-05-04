@@ -861,6 +861,67 @@ def tree(path: str = ".", max_depth: int = 2, max_entries: int = 200) -> str:
 
 
 @tool()
+def parse_csv(path: str, max_rows: int = 100) -> str:
+    """Parse a CSV file and return rows as JSON dicts (sub-project 99).
+
+    Output is a JSON array of objects keyed by column name. Auto-sniffs
+    delimiter (same heuristic as csv_summary). Workspace-confined;
+    max_rows capped at 1000 to keep responses bounded.
+
+    Use this when the agent needs to *act on* CSV data — pairs with
+    csv_summary which just shows shape. Returns ``[error] ...`` on
+    read/parse failure.
+    """
+    import csv as _csv
+    import json as _json
+    from pathlib import Path as _Path
+
+    if not path:
+        return "[error] path required"
+    ws = current_workspace()
+    p = _Path(path)
+    if not p.is_absolute() and ws is not None:
+        p = ws.root / p
+    try:
+        p = p.resolve()
+    except OSError as e:
+        return f"[error] cannot resolve {path!r}: {e}"
+    if ws is not None:
+        try:
+            p.relative_to(ws.root)
+        except ValueError:
+            return f"[error] {p} is outside the active workspace"
+    if not p.is_file():
+        return f"[error] not a file: {p}"
+
+    cap = max(1, min(int(max_rows), 1000))
+    try:
+        with open(p, "r", encoding="utf-8", errors="replace", newline="") as f:
+            head_sample = f.read(8192)
+            try:
+                dialect = _csv.Sniffer().sniff(head_sample, delimiters=",;\t|")
+            except _csv.Error:
+                dialect = _csv.excel
+            f.seek(0)
+            reader = _csv.DictReader(f, dialect=dialect)
+            rows: list[dict] = []
+            truncated = False
+            for r in reader:
+                rows.append({k: v for k, v in r.items() if k is not None})
+                if len(rows) >= cap:
+                    if next(reader, None) is not None:
+                        truncated = True
+                    break
+    except Exception as e:
+        return f"[error] read failed: {type(e).__name__}: {e}"
+
+    payload = _json.dumps(rows, indent=2, ensure_ascii=False)
+    if truncated:
+        payload += f"\n... [truncated at max_rows={cap}]"
+    return payload
+
+
+@tool()
 def csv_summary(path: str, sample_rows: int = 5) -> str:
     """Quick overview of a CSV file (sub-project 78).
 
