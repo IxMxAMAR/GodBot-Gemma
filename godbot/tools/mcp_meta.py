@@ -12,6 +12,62 @@ from godbot.core.registry import tool
 
 
 @tool()
+def mcp_describe(server: str) -> str:
+    """Describe the tools advertised by one MCP server (sub-project 83).
+
+    Output:
+
+      server: <name>
+      status: connected | disconnected | not-booted
+      tools (N):
+        - tool_a: <description>
+        - tool_b: <description>
+
+    Returns ``[error] no server <name>`` when the configured server
+    name is unknown. Never raises; missing MCP infrastructure
+    collapses to a friendly status string.
+    """
+    if not server:
+        return "[error] server name required"
+
+    try:
+        from godbot.config import load_config
+    except Exception as e:
+        return f"(mcp_describe: failed to load config — {type(e).__name__}: {e})"
+
+    try:
+        cfg = load_config()
+    except Exception as e:
+        return f"(mcp_describe: load_config raised — {type(e).__name__}: {e})"
+
+    if server not in cfg.mcp.servers:
+        return f"[error] no MCP server named {server!r} (configured: {', '.join(cfg.mcp.servers) or 'none'})"
+
+    try:
+        from godbot.mcp.registry_bridge import _clients
+    except Exception:
+        _clients = {}  # type: ignore[assignment]
+
+    client = _clients.get(server)
+    parts = [f"server: {server}"]
+    if client is None:
+        parts.append("status: not-booted")
+        return "\n".join(parts)
+    if not client.connected:
+        parts.append(f"status: disconnected ({client.connect_error or 'unknown'})")
+        return "\n".join(parts)
+    parts.append("status: connected")
+    if not client.tools:
+        parts.append("tools (0): (no tools advertised)")
+        return "\n".join(parts)
+    parts.append(f"tools ({len(client.tools)}):")
+    for t in client.tools:
+        desc = (t.get("description") or "").strip().splitlines()[0] if t.get("description") else "(no description)"
+        parts.append(f"  - {t['name']}: {desc}")
+    return "\n".join(parts)
+
+
+@tool()
 def mcp_status() -> str:
     """List configured MCP servers, connection state, and advertised tools.
 
