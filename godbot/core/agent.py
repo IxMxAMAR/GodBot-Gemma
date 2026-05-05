@@ -191,8 +191,18 @@ async def run_turn(
         model_info = None
         protocol_pref = REACT_JSON
 
+    # max_steps <= 0 means "no brake" — loop until the agent emits a
+    # final_answer or the user cancels. itertools.count() is unbounded.
+    if max_steps <= 0:
+        import itertools
+        step_iter: object = itertools.count()
+        unbounded = True
+    else:
+        step_iter = range(max_steps)
+        unbounded = False
+
     try:
-        for step in range(max_steps):
+        for step in step_iter:
             if cancel.is_set():
                 await emit(ErrorEvent(message="cancelled", recoverable=False))
                 return
@@ -289,7 +299,18 @@ async def run_turn(
 
             await _handle_action(parsed, session, registry, enabled, emit, cancel)
 
-        await emit(ErrorEvent(message="max_steps exceeded", recoverable=False))
+        # The else clause runs only when the for-loop exhausted naturally
+        # (i.e. the bounded range hit max_steps). itertools.count() never
+        # exhausts, so this is unreachable when unbounded=True.
+        if not unbounded:
+            await emit(ErrorEvent(
+                message=(
+                    f"max_steps exceeded ({max_steps}). Bump [agent] "
+                    "max_steps in ~/.godbot/config.toml, or set it to 0 "
+                    "to disable the brake."
+                ),
+                recoverable=False,
+            ))
     finally:
         if ws_token is not None:
             _workspace_current.reset(ws_token)

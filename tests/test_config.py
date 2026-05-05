@@ -9,7 +9,7 @@ def test_defaults_load(tmp_godbot_home):
     assert cfg.llm.base_url == "http://localhost:1234/v1"
     assert cfg.llm.model == "auto"
     assert cfg.llm.max_context == 28000
-    assert cfg.agent.max_steps == 25
+    assert cfg.agent.max_steps == 100  # bumped from 25 in SP110
     assert cfg.tools.enabled == "*"
     assert cfg.tools.yolo is False
     assert cfg.rag.embedder == "lmstudio"
@@ -31,7 +31,7 @@ def test_user_override(tmp_godbot_home):
     cfg = load_config()
     assert cfg.llm.model == "gemma-special"
     assert cfg.ui.web_port == 9000
-    assert cfg.agent.max_steps == 25  # unspecified -> default
+    assert cfg.agent.max_steps == 100  # unspecified -> default (SP110 bump)
 
 
 def test_default_config_text_is_parseable(tmp_godbot_home):

@@ -22,7 +22,21 @@ class LLMConfig:
 
 @dataclass
 class AgentConfig:
-    max_steps: int = 25
+    """Agent loop limits.
+
+    ``max_steps``: hard cap on LLM round-trips per chat turn. 100 is a
+    reasonable headroom for non-trivial multi-tool work; bump higher
+    for marathon refactors. **Set to 0 (or any value <= 0) to disable
+    the brake entirely** — the loop runs until the agent emits a
+    final_answer or the user cancels via /api/stop. Disabling is
+    safer for local models than for paid providers, where a runaway
+    can rack up real cost.
+
+    ``default_tool_timeout``: per-tool timeout in seconds, applied
+    when a tool doesn't override via its own ``@tool(timeout=…)``.
+    """
+
+    max_steps: int = 100
     default_tool_timeout: int = 60
 
 
@@ -143,7 +157,12 @@ def default_config_text() -> str:
         "max_tokens = 4096\n"
         "max_context = 28000\n"
         "\n[agent]\n"
-        "max_steps = 25\n"
+        "# Hard cap on LLM round-trips per chat turn. Set to 0 to disable.\n"
+        "# 100 is generous for normal multi-tool work; bump for marathon runs.\n"
+        "# Disabling is fine for local models; on paid providers a runaway\n"
+        "# can rack up real charges, so consider pairing with a session\n"
+        "# budget cap (POST /api/sessions/{sid}/budget {max_usd: 1.0}).\n"
+        "max_steps = 100\n"
         "default_tool_timeout = 60\n"
         "\n[tools]\n"
         'enabled = "*"\n'
