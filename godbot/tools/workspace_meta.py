@@ -1805,6 +1805,31 @@ def python_info() -> str:
 
 
 @tool()
+def slugify(text: str, max_length: int = 80) -> str:
+    """Convert text to a URL/filename-safe slug (sub-project 101).
+
+    Lowercases, replaces non-alphanumerics with ``-``, collapses
+    consecutive dashes, strips leading/trailing dashes, and truncates
+    to ``max_length`` (clamped to [1, 200]). Useful for the agent
+    generating filenames from titles or constructing URLs.
+
+    Returns ``"-"`` when the input has no alphanumerics so the caller
+    always gets a usable string instead of empty.
+    """
+    import re as _re
+    if not isinstance(text, str):
+        return "[error] text must be a string"
+    cap = max(1, min(int(max_length), 200))
+    s = text.lower()
+    s = _re.sub(r"[^a-z0-9]+", "-", s)
+    s = s.strip("-")
+    s = _re.sub(r"-{2,}", "-", s)
+    if not s:
+        return "-"
+    return s[:cap]
+
+
+@tool()
 def random_id(kind: str = "uuid", length: int = 16) -> str:
     """Generate a random identifier (sub-project 62).
 
