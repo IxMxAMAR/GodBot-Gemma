@@ -1804,6 +1804,48 @@ def python_info() -> str:
     return "\n".join(parts)
 
 
+_URL_RE = r"https?://[^\s<>\")\]}]+|ftp://[^\s<>\")\]}]+"
+_EMAIL_RE = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+
+
+@tool()
+def extract_links(text: str, kind: str = "all") -> str:
+    """Extract URLs and/or email addresses from text (sub-project 103).
+
+    ``kind`` selects: ``"url"`` (http/https/ftp), ``"email"``, or
+    ``"all"`` (default; both, in order of appearance). Returns one
+    match per line:
+
+      url: https://example.com
+      email: contact@example.com
+      url: ftp://files.example.com
+
+    Returns ``"(no matches)"`` when nothing found. Useful when the
+    agent processes scraped pages or unstructured text and needs a
+    structured list of links.
+    """
+    import re as _re
+    if not isinstance(text, str):
+        return "[error] text must be a string"
+    kind = (kind or "all").lower()
+    if kind not in {"url", "email", "all"}:
+        return f"[error] kind must be 'url', 'email', or 'all', got {kind!r}"
+
+    out: list[tuple[int, str, str]] = []
+    if kind in ("url", "all"):
+        for m in _re.finditer(_URL_RE, text):
+            out.append((m.start(), "url", m.group(0).rstrip(".,;:")))
+    if kind in ("email", "all"):
+        for m in _re.finditer(_EMAIL_RE, text):
+            out.append((m.start(), "email", m.group(0)))
+    if not out:
+        return "(no matches)"
+    out.sort(key=lambda x: x[0])
+    if kind == "all":
+        return "\n".join(f"{k}: {v}" for _, k, v in out)
+    return "\n".join(v for _, _, v in out)
+
+
 @tool()
 def levenshtein(a: str, b: str) -> str:
     """Compute Levenshtein edit distance between two strings (sub-project 102).
