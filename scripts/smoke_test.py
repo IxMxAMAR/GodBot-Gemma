@@ -180,7 +180,7 @@ class SmokeRunner:
             return False
 
     def run(self, provider: str, model: str, skip_llm: bool) -> int:
-        print(f"\n{YELLOW('GodBot smoke test')} → {self.base_url}\n")
+        print(f"\n{YELLOW('GodBot smoke test')} -> {self.base_url}\n")
         phases = [
             self.phase_health,
             self.phase_version,
