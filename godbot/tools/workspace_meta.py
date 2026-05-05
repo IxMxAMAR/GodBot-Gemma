@@ -1805,6 +1805,43 @@ def python_info() -> str:
 
 
 @tool()
+def levenshtein(a: str, b: str) -> str:
+    """Compute Levenshtein edit distance between two strings (sub-project 102).
+
+    Returns ``"distance: N (similarity: P.PP)"`` where similarity is
+    ``1 - N/max(len(a), len(b))``. Useful for fuzzy matching: "did the
+    user mean X?", typo tolerance, near-dup detection.
+
+    Both inputs must be strings; truncated to 5000 chars each so the
+    O(len(a)*len(b)) DP table stays bounded.
+    """
+    if not isinstance(a, str) or not isinstance(b, str):
+        return "[error] both a and b must be strings"
+    a_t = a[:5000]
+    b_t = b[:5000]
+    if a_t == b_t:
+        return "distance: 0 (similarity: 1.00)"
+    if not a_t:
+        return f"distance: {len(b_t)} (similarity: 0.00)"
+    if not b_t:
+        return f"distance: {len(a_t)} (similarity: 0.00)"
+    prev = list(range(len(b_t) + 1))
+    for i, ca in enumerate(a_t, 1):
+        cur = [i] + [0] * len(b_t)
+        for j, cb in enumerate(b_t, 1):
+            cur[j] = min(
+                prev[j] + 1,
+                cur[j - 1] + 1,
+                prev[j - 1] + (0 if ca == cb else 1),
+            )
+        prev = cur
+    dist = prev[-1]
+    longer = max(len(a_t), len(b_t))
+    sim = 1 - dist / longer if longer else 1.0
+    return f"distance: {dist} (similarity: {sim:.2f})"
+
+
+@tool()
 def slugify(text: str, max_length: int = 80) -> str:
     """Convert text to a URL/filename-safe slug (sub-project 101).
 
