@@ -2073,6 +2073,54 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             raise HTTPException(404, "no such session")
         return s.feedback_summary()
 
+    @app.post("/api/sessions/{sid}/workspace")
+    async def session_set_workspace(sid: str, request: Request):
+        """Change a session's workspace mid-flight (sub-project 105).
+
+        Body: ``{workspace: <abs path or null>, auto_approve_in_sandbox?: bool}``.
+        Pass ``null`` to unbind. Validates the path exists + is a
+        directory before applying. The change takes effect on the next
+        agent turn (the workspace contextvar is set per-turn).
+
+        Use case: "I started this session against folder A but want to
+        continue against folder B" without spinning up a new session
+        and losing the conversation history.
+        """
+        try:
+            session = _sessions_cache.get(sid) or Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be a JSON object")
+        workspace = body.get("workspace")  # may be None to clear
+        if workspace is not None and not isinstance(workspace, str):
+            raise HTTPException(400, "workspace must be a string path or null")
+        if workspace:
+            from pathlib import Path as _Path
+            try:
+                wp = _Path(workspace).resolve()
+            except OSError as e:
+                raise HTTPException(400, f"workspace path invalid: {e}")
+            if not wp.is_dir():
+                raise HTTPException(400, f"workspace not a directory: {wp}")
+            workspace = str(wp)
+        auto = body.get("auto_approve_in_sandbox")
+        if auto is None:
+            # Preserve existing flag if not specified.
+            auto = bool(session._meta.get("auto_approve_in_sandbox", False))
+        session.set_workspace(workspace, auto_approve=bool(auto))
+        _sessions_cache[sid] = session
+        return {
+            "ok": True,
+            "workspace_root": session._meta.get("workspace_root"),
+            "auto_approve_in_sandbox": bool(session._meta.get("auto_approve_in_sandbox", False)),
+        }
+
     @app.post("/api/sessions/{sid}/pin")
     async def session_pin(sid: str, request: Request):
         """Pin or unpin a session (sub-project 52).
