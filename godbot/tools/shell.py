@@ -41,12 +41,62 @@ def run_powershell(cmd: str, cwd: str | None = None, timeout: int = 60) -> str:
     )
 
 
+_WSL_STUB_HINT = (
+    "Windows Subsystem for Linux has no installed distributions"
+)
+
+
+def _find_bash_windows() -> tuple[str | None, str | None]:
+    """Locate a real bash on Windows, skipping the WSL stub.
+
+    Returns (path, source_label) or (None, None) when only the WSL stub
+    or nothing at all is found. Search order matches typical user
+    expectations: Git Bash > MSYS2 > Cygwin > PATH (after a stub check).
+    """
+    candidates = [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+        r"C:\msys64\usr\bin\bash.exe",
+        r"C:\cygwin64\bin\bash.exe",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c, "git-bash" if "Git" in c else ("msys2" if "msys64" in c else "cygwin")
+    # Fall back to PATH but reject the WSL stub explicitly.
+    found = shutil.which("bash")
+    if found and "system32" not in found.lower():
+        return found, "PATH"
+    return None, None
+
+
 @tool(dangerous=True, timeout=120)
 def run_bash(cmd: str, cwd: str | None = None, timeout: int = 60) -> str:
-    """Run a bash command. Returns stdout, stderr, and exit code."""
-    # Windows: prefer Git Bash via shutil.which (avoids WSL stub bash.exe shadowing);
-    # else /bin/bash on POSIX.
+    """Run a bash command. Returns stdout, stderr, and exit code.
+
+    On Windows, prefers Git Bash / MSYS2 / Cygwin over the WSL stub at
+    ``C:\\Windows\\System32\\bash.exe`` (which fails when WSL has no
+    distros installed). If no real bash is available, returns an error
+    pointing at ``run_powershell`` instead — without that hint the
+    agent tends to retry the same broken bash call in a loop.
+    """
     if sys.platform == "win32":
-        bash_path = shutil.which("bash") or "bash"
-        return _run([bash_path, "-c", cmd], timeout=timeout, cwd=cwd)
+        bash_path, _source = _find_bash_windows()
+        if bash_path is None:
+            return (
+                "[error] no real bash found on this Windows host (only the "
+                "WSL stub is on PATH and it has no distros installed). "
+                "Use run_powershell for shell commands, or install Git for "
+                "Windows / MSYS2 if you specifically need bash."
+            )
+        result = _run([bash_path, "-c", cmd], timeout=timeout, cwd=cwd)
+        # Defensive: if somehow we still ended up routing through the WSL
+        # stub (PATH change, alias, etc.), rewrite the error so the agent
+        # sees actionable guidance instead of WSL install instructions.
+        if _WSL_STUB_HINT in result:
+            return (
+                "[error] bash invocation hit the Windows WSL stub which has "
+                "no distros installed. Use run_powershell instead."
+            )
+        return result
     return _run(["/bin/bash", "-c", cmd], timeout=timeout, cwd=cwd)
