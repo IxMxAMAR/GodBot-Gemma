@@ -24,7 +24,9 @@
       { "command": "godbot.askSelection", "title": "GodBot: Ask about selection" },
       { "command": "godbot.newSession", "title": "GodBot: New session" },
       { "command": "godbot.openChat", "title": "GodBot: Open chat" },
-      { "command": "godbot.openInEditor", "title": "GodBot: Open in editor" }
+      { "command": "godbot.openInEditor", "title": "GodBot: Open in editor" },
+      { "command": "godbot.abortAll", "title": "GodBot: Abort all sessions and tasks" },
+      { "command": "godbot.openWorkspace", "title": "GodBot: Open workspace from history" }
     ],
     "keybindings": [
       { "command": "godbot.askSelection", "key": "ctrl+alt+g", "when": "editorTextFocus" },

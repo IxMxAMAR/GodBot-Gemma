@@ -65,6 +65,50 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!text) return;
       await providerSingleton!.send(prefix + text);
     }),
+    vscode.commands.registerCommand('godbot.abortAll', async () => {
+      if (!state.client) {
+        vscode.window.showErrorMessage('GodBot: client not initialized');
+        return;
+      }
+      try {
+        const res = await state.client.abortAll();
+        vscode.window.showInformationMessage(
+          `GodBot: aborted ${res.sessions_signaled} session(s), ${res.tasks_signaled} task(s)`,
+        );
+      } catch (e) {
+        vscode.window.showErrorMessage(`GodBot abortAll failed: ${(e as Error).message}`);
+      }
+    }),
+    vscode.commands.registerCommand('godbot.openWorkspace', async () => {
+      if (!state.client) {
+        vscode.window.showErrorMessage('GodBot: client not initialized');
+        return;
+      }
+      let workspaces: Array<{ path: string; sessions: number; last_activity: string }>;
+      try {
+        workspaces = await state.client.listWorkspaces();
+      } catch (e) {
+        vscode.window.showErrorMessage(`GodBot listWorkspaces failed: ${(e as Error).message}`);
+        return;
+      }
+      if (workspaces.length === 0) {
+        vscode.window.showInformationMessage('GodBot: no workspaces recorded yet');
+        return;
+      }
+      const items: vscode.QuickPickItem[] = workspaces.map((w) => ({
+        label: w.path,
+        description: `${w.sessions} session${w.sessions === 1 ? '' : 's'}`,
+        detail: w.last_activity ? `last activity ${w.last_activity}` : undefined,
+      }));
+      const pick = await vscode.window.showQuickPick(items, {
+        placeHolder: 'Select a GodBot workspace to open',
+        matchOnDescription: true,
+        matchOnDetail: true,
+      });
+      if (!pick) return;
+      const uri = vscode.Uri.file(pick.label);
+      await vscode.commands.executeCommand('vscode.openFolder', uri);
+    }),
   );
 }
 

@@ -77,6 +77,21 @@ export class GodBotClient {
     await this._req('POST', '/api/rag/use', { session_id: sid, collection });
   }
 
+  async abortAll(): Promise<{ ok: boolean; sessions_signaled: number; tasks_signaled: number }> {
+    return await this._req('POST', '/api/agent/abort_all') as {
+      ok: boolean;
+      sessions_signaled: number;
+      tasks_signaled: number;
+    };
+  }
+
+  async listWorkspaces(): Promise<Array<{ path: string; sessions: number; last_activity: string }>> {
+    const r = await this._req('GET', '/api/workspaces') as {
+      workspaces: Array<{ path: string; sessions: number; last_activity: string }>;
+    };
+    return r.workspaces;
+  }
+
   /**
    * Stream SSE events from /api/chat/stream until DoneEvent or close.
    * Yields parsed event objects. Drops `ping` heartbeats.
