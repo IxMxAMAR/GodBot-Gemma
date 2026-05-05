@@ -1277,6 +1277,74 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
         except Exception:
             return {"version": "0.0.0"}
 
+    @app.get("/api/version/check_update")
+    async def api_check_update(timeout: float = 5.0):
+        """Compare installed version against the latest GitHub release
+        (sub-project 107).
+
+        Returns:
+
+          {
+            current: "x.y.z",
+            latest: "x.y.z" | null,
+            update_available: bool,
+            release_url: <html_url> | null,
+            error: <str> | null,
+          }
+
+        Hits ``api.github.com/repos/IxMxAMAR/GodBot-Gemma/releases/latest``.
+        Network failures are non-fatal: ``error`` is populated and
+        ``update_available`` is ``false``. ``timeout`` capped at [1, 30]s.
+        """
+        import httpx as _httpx
+
+        try:
+            from importlib.metadata import version as _version
+            current = _version("godbot")
+        except Exception:
+            current = "0.0.0"
+
+        t = max(1.0, min(float(timeout), 30.0))
+        repo = "IxMxAMAR/GodBot-Gemma"
+        try:
+            async with _httpx.AsyncClient(timeout=t) as client:
+                r = await client.get(
+                    f"https://api.github.com/repos/{repo}/releases/latest",
+                    headers={"User-Agent": "GodBot/0.1"},
+                )
+            if r.status_code == 404:
+                return {
+                    "current": current, "latest": None,
+                    "update_available": False, "release_url": None,
+                    "error": "no published releases yet",
+                }
+            r.raise_for_status()
+            data = r.json()
+        except _httpx.HTTPError as e:
+            return {
+                "current": current, "latest": None,
+                "update_available": False, "release_url": None,
+                "error": f"{type(e).__name__}: {e}",
+            }
+        latest_raw = str(data.get("tag_name") or data.get("name") or "")
+        latest = latest_raw.lstrip("v")
+        # Naive semver compare: split by `.`, pad to 3 parts, compare ints.
+        def _parts(v: str) -> tuple[int, int, int]:
+            try:
+                bits = (v.split("-")[0].split(".") + ["0", "0", "0"])[:3]
+                return (int(bits[0]), int(bits[1]), int(bits[2]))
+            except (ValueError, IndexError):
+                return (0, 0, 0)
+
+        update_available = _parts(latest) > _parts(current) if latest else False
+        return {
+            "current": current,
+            "latest": latest or None,
+            "update_available": update_available,
+            "release_url": data.get("html_url"),
+            "error": None,
+        }
+
     @app.post("/api/agent/raw_completion/stream")
     async def agent_raw_completion_stream(request: Request):
         """Streaming version of POST /api/agent/raw_completion (sub-project 89).
