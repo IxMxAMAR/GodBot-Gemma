@@ -60,12 +60,69 @@ class Client:
         r = await self._request("POST", "/api/sessions/new", json={"model": model})
         return r.json()["session_id"]
 
-    async def list_sessions(self) -> list[dict]:
-        r = await self._request("GET", "/api/sessions")
+    async def list_sessions(
+        self,
+        limit: Optional[int] = None,
+        workspace: Optional[str] = None,
+        pinned_only: bool = False,
+    ) -> list[dict]:
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = int(limit)
+        if workspace is not None:
+            params["workspace"] = workspace
+        if pinned_only:
+            params["pinned_only"] = "true"
+        r = await self._request("GET", "/api/sessions", params=params or None)
         return r.json()
 
     async def get_session(self, sid: str) -> dict:
         r = await self._request("GET", f"/api/sessions/{sid}")
+        return r.json()
+
+    # --- Aggregate / one-shot endpoints (sub-projects 32, 93, 94) ---
+    async def stats(self) -> dict:
+        """GET /api/stats — aggregate metrics across all sessions on disk."""
+        r = await self._request("GET", "/api/stats")
+        return r.json()
+
+    async def quickrun(
+        self,
+        goal: str,
+        *,
+        workspace: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        max_steps: Optional[int] = None,
+        max_wait_seconds: Optional[float] = None,
+        safe_only: Optional[bool] = None,
+    ) -> dict:
+        """POST /api/agent/quickrun — one-shot synchronous agent invocation.
+
+        Returns the raw response dict: result, session_id, task_id,
+        tool_calls, step_count, elapsed_ms, status.
+        """
+        body: dict[str, Any] = {"goal": goal}
+        if workspace is not None:
+            body["workspace"] = workspace
+        if provider is not None:
+            body["provider"] = provider
+        if model is not None:
+            body["model"] = model
+        if max_steps is not None:
+            body["max_steps"] = int(max_steps)
+        if max_wait_seconds is not None:
+            body["max_wait_seconds"] = float(max_wait_seconds)
+        if safe_only is not None:
+            body["safe_only"] = bool(safe_only)
+        # quickrun blocks server-side for up to max_wait_seconds (default 60s,
+        # capped at 600s by the daemon). Use a generous client timeout so we
+        # don't ReadTimeout before the daemon decides to give up.
+        wait = float(max_wait_seconds) if max_wait_seconds is not None else 60.0
+        timeout = httpx.Timeout(wait + 30.0, connect=10.0)
+        r = await self._request(
+            "POST", "/api/agent/quickrun", json=body, timeout=timeout,
+        )
         return r.json()
 
     # --- Chat ---
