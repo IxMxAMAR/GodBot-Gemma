@@ -1939,6 +1939,36 @@ def levenshtein(a: str, b: str) -> str:
 
 
 @tool()
+def wrap_text(text: str, width: int = 80, indent: str = "") -> str:
+    """Word-wrap text to a given width (sub-project 106).
+
+    Wraps each paragraph (blank-line-separated) with Python's textwrap;
+    preserves blank lines between paragraphs. ``width`` clamped to
+    [10, 500]. ``indent`` is prepended to every wrapped line — useful
+    for nesting blocks under bullets.
+
+    Returns ``[error] ...`` on non-string input.
+    """
+    import textwrap as _textwrap
+    if not isinstance(text, str):
+        return "[error] text must be a string"
+    if not isinstance(indent, str):
+        return "[error] indent must be a string"
+    w = max(10, min(int(width), 500))
+    paragraphs = text.split("\n\n")
+    wrapped: list[str] = []
+    for para in paragraphs:
+        if not para.strip():
+            wrapped.append("")
+            continue
+        wrapped.append(_textwrap.fill(
+            para, width=w,
+            initial_indent=indent, subsequent_indent=indent,
+        ))
+    return "\n\n".join(wrapped)
+
+
+@tool()
 def slugify(text: str, max_length: int = 80) -> str:
     """Convert text to a URL/filename-safe slug (sub-project 101).
 
