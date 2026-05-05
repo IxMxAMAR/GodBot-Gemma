@@ -2398,6 +2398,52 @@ def build_app(*, sessions_root: Optional[Path] = None) -> FastAPI:
             "usage": s.usage,
         }
 
+    @app.get("/api/sessions/{sid}/context_usage")
+    async def session_context_usage(sid: str):
+        """How full is the model's context window for this session
+        (sub-project 111).
+
+        Different from /usage which is cumulative-since-creation: this
+        endpoint estimates the size of the NEXT LLM request — current
+        message log plus a small system-prompt allowance, capped at
+        ``cfg.llm.max_context``. Returns:
+
+          {
+            used_tokens: <int>,       # estimated for the next call
+            max_context: <int>,       # from config.llm.max_context
+            percent: <float 0..100>,
+            turns: <int>,             # cumulative turn count
+            avg_turn_tokens: <int>,   # input_tokens / turns
+          }
+
+        Useful for a "context bar" UI ("47% full") so the user knows
+        when they're approaching the trim threshold (~80% of max).
+        """
+        from godbot.core.session import estimate_tokens
+
+        try:
+            s = Session.load(sessions_root, sid)
+        except FileNotFoundError:
+            raise HTTPException(404, "no such session")
+        cfg = load_config()
+        max_ctx = max(1, int(cfg.llm.max_context or 28000))
+        msgs = s.messages_for_llm(max_context=0)
+        used = sum(estimate_tokens(m.get("content") or "") for m in msgs)
+        # Rough allowance for the system prompt + tool catalog so the
+        # bar isn't optimistically empty after a fresh session.
+        used += 1500
+        usage = s.usage
+        avg_turn = (
+            usage["input_tokens"] // usage["turns"] if usage["turns"] else 0
+        )
+        return {
+            "used_tokens": used,
+            "max_context": max_ctx,
+            "percent": round(min(100.0, used / max_ctx * 100), 1),
+            "turns": usage["turns"],
+            "avg_turn_tokens": avg_turn,
+        }
+
     @app.get("/api/sessions/{sid}/usage")
     async def session_usage(sid: str):
         """Cumulative token usage for one session (sub-project 20).
