@@ -126,3 +126,104 @@ def build_error_embed(ev: ErrorEvent) -> dict[str, Any]:
         "description": _trim(ev.message, 2000),
         "color": 0xEF4444,
     }
+
+
+def build_stats_embed(data: dict[str, Any]) -> dict[str, Any]:
+    """Render a /api/stats payload as a Discord embed (sub-project 32)."""
+    usage = data.get("usage", {}) or {}
+    tasks = data.get("tasks", {}) or {}
+    top_tools = data.get("top_tools", []) or []
+    top_str = "\n".join(
+        f"`{t['name']}` × {t['count']}" for t in top_tools[:5]
+    ) or "(none yet)"
+    by_status = tasks.get("by_status", {}) or {}
+    status_str = ", ".join(f"{k}={v}" for k, v in by_status.items()) or "(none)"
+    return {
+        "title": "GodBot stats",
+        "color": GROUP_COLORS["default"],
+        "fields": [
+            {
+                "name": "Sessions / turns",
+                "value": f"{data.get('sessions', 0)} / {data.get('turns', 0)}",
+                "inline": True,
+            },
+            {
+                "name": "Tool calls",
+                "value": str(data.get("tool_calls_total", 0)),
+                "inline": True,
+            },
+            {
+                "name": "Tasks",
+                "value": f"{tasks.get('total', 0)} ({status_str})",
+                "inline": True,
+            },
+            {
+                "name": "Tokens (in / out / total)",
+                "value": (
+                    f"{usage.get('input_tokens', 0)} / "
+                    f"{usage.get('output_tokens', 0)} / "
+                    f"{usage.get('total_tokens', 0)}"
+                ),
+                "inline": False,
+            },
+            {
+                "name": "Estimated cost",
+                "value": f"${data.get('estimated_cost_usd', 0):.4f}",
+                "inline": True,
+            },
+            {
+                "name": "Top tools",
+                "value": _trim(top_str, 1000),
+                "inline": False,
+            },
+        ],
+    }
+
+
+def build_cost_embed(sid: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Render a /api/sessions/{sid}/cost payload as an embed (sub-project 23)."""
+    usage = data.get("usage", {}) or {}
+    matched = data.get("matched", False)
+    usd = data.get("usd", 0.0) or 0.0
+    rate_note = "" if matched else " *(rate unknown — showing $0)*"
+    return {
+        "title": f"Session cost — {sid[:8]}…",
+        "description": f"**${usd:.6f}**{rate_note}",
+        "color": GROUP_COLORS["default"],
+        "fields": [
+            {
+                "name": "Provider / model",
+                "value": f"{data.get('provider', '?')} / {data.get('model', '?')}",
+                "inline": False,
+            },
+            {
+                "name": "Input tokens",
+                "value": str(usage.get("input_tokens", 0)),
+                "inline": True,
+            },
+            {
+                "name": "Output tokens",
+                "value": str(usage.get("output_tokens", 0)),
+                "inline": True,
+            },
+            {
+                "name": "Turns",
+                "value": str(usage.get("turns", 0)),
+                "inline": True,
+            },
+        ],
+    }
+
+
+def build_abort_embed(data: dict[str, Any]) -> dict[str, Any]:
+    """Render a /api/agent/abort_all response as an embed (sub-project 98)."""
+    sessions = data.get("sessions_signaled", 0)
+    tasks = data.get("tasks_signaled", 0)
+    return {
+        "title": "🛑 Abort signalled",
+        "description": (
+            f"Cancel flag set on **{sessions}** session(s) and "
+            f"**{tasks}** background task(s)."
+        ),
+        "color": 0xEF4444,
+    }

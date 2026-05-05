@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Optional
 
 import discord
+import httpx
+from discord import app_commands
 
 from godbot.client import Session
 from godbot.client.embedded import EmbeddedRunner
@@ -17,8 +19,9 @@ from godbot.core.events import (
 )
 from godbot.interfaces.discord_bot.config import load_discord_config
 from godbot.interfaces.discord_bot.rendering import (
-    TokenAccumulator, build_error_embed, build_gate_embed,
-    build_tool_call_embed, build_tool_result_update, extract_final_answer,
+    TokenAccumulator, build_abort_embed, build_cost_embed, build_error_embed,
+    build_gate_embed, build_stats_embed, build_tool_call_embed,
+    build_tool_result_update, extract_final_answer,
 )
 from godbot.interfaces.discord_bot.session_map import ChannelSessionMap
 from godbot.interfaces.discord_bot.views import GateView
@@ -53,9 +56,16 @@ class GodBotClient(discord.Client):
         self._channel_tasks: dict[int, asyncio.Task] = {}
         self._global_lock = asyncio.Lock()  # used in --no-daemon mode
         self._embedded_warning_emitted = False
+        self.tree = app_commands.CommandTree(self)
+        self._register_slash_commands()
 
     async def on_ready(self) -> None:
         log.info("Bot ready as %s", self.user)
+        try:
+            synced = await self.tree.sync()
+            log.info("Synced %d slash command(s)", len(synced))
+        except Exception as e:  # pragma: no cover — depends on Discord runtime
+            log.warning("Slash command sync failed: %s", e)
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
@@ -185,6 +195,100 @@ class GodBotClient(discord.Client):
             await channel.send(
                 embed=discord.Embed.from_dict(build_error_embed(ErrorEvent(message=str(e))))
             )
+
+    # ------------------------------------------------------------------
+    # Slash commands (sub-projects 23, 32, 98). The daemon HTTP API is
+    # the source of truth — these commands are thin renderers that call
+    # the relevant endpoints and post embeds. No local state.
+    # ------------------------------------------------------------------
+
+    async def _http_get(self, path: str) -> dict:
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=10.0) as c:
+            r = await c.get(path)
+            r.raise_for_status()
+            return r.json()
+
+    async def _http_post(self, path: str) -> dict:
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=10.0) as c:
+            r = await c.post(path)
+            r.raise_for_status()
+            return r.json()
+
+    def _register_slash_commands(self) -> None:
+        @self.tree.command(name="stats", description="Show GodBot daemon stats.")
+        async def _stats(interaction: discord.Interaction) -> None:
+            await self._cmd_stats(interaction)
+
+        @self.tree.command(
+            name="cost",
+            description="Show running USD + token cost for this channel's session.",
+        )
+        async def _cost(interaction: discord.Interaction) -> None:
+            await self._cmd_cost(interaction)
+
+        @self.tree.command(
+            name="abort",
+            description="(owner) Abort all in-flight sessions and tasks.",
+        )
+        async def _abort(interaction: discord.Interaction) -> None:
+            await self._cmd_abort(interaction)
+
+    async def _send_command_error(
+        self, interaction: discord.Interaction, message: str
+    ) -> None:
+        embed = discord.Embed.from_dict(build_error_embed(ErrorEvent(message=message)))
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _cmd_stats(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        try:
+            data = await self._http_get("/api/stats")
+        except Exception as e:
+            await self._send_command_error(interaction, f"stats failed: {e}")
+            return
+        await interaction.followup.send(
+            embed=discord.Embed.from_dict(build_stats_embed(data))
+        )
+
+    async def _cmd_cost(self, interaction: discord.Interaction) -> None:
+        channel_id = interaction.channel_id or 0
+        sid = self._channel_sessions.get(channel_id)
+        if not sid:
+            await interaction.response.send_message(
+                "No GodBot session bound to this channel yet — "
+                "send a message to start one.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            data = await self._http_get(f"/api/sessions/{sid}/cost")
+        except Exception as e:
+            await self._send_command_error(interaction, f"cost failed: {e}")
+            return
+        await interaction.followup.send(
+            embed=discord.Embed.from_dict(build_cost_embed(sid, data))
+        )
+
+    async def _cmd_abort(self, interaction: discord.Interaction) -> None:
+        # Owner-only, matching the on_message owner gate above.
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "Only the bot owner can abort.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            data = await self._http_post("/api/agent/abort_all")
+        except Exception as e:
+            await self._send_command_error(interaction, f"abort failed: {e}")
+            return
+        await interaction.followup.send(
+            embed=discord.Embed.from_dict(build_abort_embed(data))
+        )
 
 
 def main() -> int:
