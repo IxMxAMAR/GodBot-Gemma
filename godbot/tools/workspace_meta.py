@@ -1809,6 +1809,61 @@ _EMAIL_RE = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
 
 
 @tool()
+def summarize_diff(diff: str) -> str:
+    """Summarise a unified diff as +N -M lines across K files (sub-project 104).
+
+    Output:
+
+      summary: K files, +N -M lines
+      per file:
+        path/to/a.py  +12 -3
+        path/to/b.py  +0  -7
+
+    Pairs with apply_patch / preview_patch (SP22+24) — agent can call
+    summarize_diff first to give the user a one-line pitch before
+    asking to apply. Returns ``[error] ...`` for non-diff input.
+    """
+    if not isinstance(diff, str):
+        return "[error] diff must be a string"
+    files: list[tuple[str, int, int]] = []
+    cur_path = ""
+    cur_add = 0
+    cur_del = 0
+    has_any = False
+    for line in diff.splitlines():
+        if line.startswith("+++ "):
+            if cur_path:
+                files.append((cur_path, cur_add, cur_del))
+            target = line[4:].strip()
+            if target.startswith("b/"):
+                target = target[2:]
+            elif target.startswith("a/"):
+                target = target[2:]
+            cur_path = target
+            cur_add = 0
+            cur_del = 0
+            has_any = True
+        elif line.startswith("+") and not line.startswith("+++"):
+            cur_add += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            cur_del += 1
+    if cur_path:
+        files.append((cur_path, cur_add, cur_del))
+    if not has_any:
+        return "[error] no `+++` file headers found — does not look like a unified diff"
+
+    total_add = sum(a for _, a, _ in files)
+    total_del = sum(d for _, _, d in files)
+    parts = [f"summary: {len(files)} file(s), +{total_add} -{total_del} lines"]
+    if files:
+        parts.append("per file:")
+        width = min(60, max(len(p) for p, _, _ in files))
+        for path, a, d in files:
+            parts.append(f"  {path[:60]:<{width}}  +{a:<3} -{d}")
+    return "\n".join(parts)
+
+
+@tool()
 def extract_links(text: str, kind: str = "all") -> str:
     """Extract URLs and/or email addresses from text (sub-project 103).
 
