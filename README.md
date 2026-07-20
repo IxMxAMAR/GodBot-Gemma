@@ -30,7 +30,7 @@ Local agent harness for Gemma 3n E4B (or any Gemma) served by LM Studio. ReAct +
 
 ## Providers (any model that can do tool calls)
 
-GodBot's daemon talks to LLMs through a provider abstraction (sub-project 7). Out of the box every session defaults to the legacy LM Studio path with ReAct + JSON-schema tool calls — that is byte-for-byte identical to v0.1. To use a different backend, pick one in `[providers.<name>]` and select it per session.
+GodBot's daemon talks to LLMs through a provider abstraction. Out of the box every session defaults to the legacy LM Studio path with ReAct + JSON-schema tool calls — that is byte-for-byte identical to v0.1. To use a different backend, pick one in `[providers.<name>]` and select it per session.
 
 Supported providers:
 

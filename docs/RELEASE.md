@@ -6,7 +6,6 @@ Manual checklist for cutting a daemon release. Studio has its own runbook.
 
 ```bash
 # from repo root
-cd <repo-root>
 
 # 1.1 confirm working tree clean
 git status
@@ -77,4 +76,4 @@ If a release adds a new entry point, add it to `pyproject.toml`'s `[project.scri
 
 The daemon ships as Python source. No signing needed for the wheel.
 
-The Studio Tauri build produces `.msi` and `.exe` installers that DO benefit from a signing cert. See `GodBotStudio/docs/RELEASE.md` for the Studio-side signing flow.
+The Studio Tauri build produces `.msi` and `.exe` installers that DO benefit from a signing cert. See GodBot-Studio's `docs/RELEASE.md` for the Studio-side signing flow.

@@ -51,10 +51,10 @@ Exit code 0 if every check passes, 1 otherwise.
 
 These require a UI or out-of-process action:
 
-- **Studio launch**: `cd <studio-checkout> && npm run tauri dev` — confirm window opens, daemon dot turns green.
+- **Studio launch**: run `npm run tauri dev` from your GodBot-Studio checkout — confirm window opens, daemon dot turns green.
 - **Discord bot**: bring up the bot, run `/stats` in a server channel — confirm it returns an embed.
 - **VSCode extension**: install `extensions/vscode/godbot-vscode-*.vsix`, run `Godbot: Open Workspace` from the Command Palette — confirm the quick-pick lists known workspaces.
-- **MCP host**: add `godbot-mcp-server` to Claude Desktop's `claude_desktop_config.json` per `docs/sub-project-11-mcp-server.md`, restart Claude Desktop, ask it to call a GodBot tool.
+- **MCP host**: add `godbot-mcp-server` to Claude Desktop's `claude_desktop_config.json` (see the "MCP servers" section of the README), restart Claude Desktop, ask it to call a GodBot tool.
 
 ## When something fails
 
